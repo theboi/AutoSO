@@ -29,7 +29,7 @@
 | `autoso/scraping/playwright_base.py` | `PlaywrightScraper` — session management, human delays |
 | `autoso/scraping/instagram.py` | `InstagramScraper` extending `PlaywrightScraper` |
 | `autoso/scraping/facebook.py` | `FacebookScraper` extending `PlaywrightScraper` |
-| `tests/conftest.py` | Shared pytest fixtures |
+| `tests/conftest.py` | Shared pytest fixtures — patches required env vars so tests never KeyError on import |
 | `tests/test_auth.py` | Auth decorator unit tests |
 | `tests/test_scraping/__init__.py` | Empty |
 | `tests/test_scraping/test_models.py` | `Post`/`Comment` construction tests |
@@ -152,6 +152,7 @@ git commit -m "chore: initialise project skeleton"
 **Files:**
 - Create: `autoso/__init__.py`
 - Create: `autoso/config.py`
+- Create: `tests/conftest.py`
 
 - [ ] **Step 1: Create `autoso/__init__.py`**
 
@@ -160,6 +161,28 @@ Empty file.
 ```bash
 mkdir -p autoso
 touch autoso/__init__.py
+```
+
+- [ ] **Step 1b: Create `tests/conftest.py`**
+
+All tests share this fixture. It patches the required env vars at session scope so importing any `autoso.*` module never raises `KeyError` in CI or a fresh checkout.
+
+```python
+# tests/conftest.py
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _required_env_vars(monkeypatch):
+    """Patch all mandatory config env vars so module imports never KeyError."""
+    monkeypatch.setenv("TELEGRAM_TOKEN", "test-telegram-token")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
+    monkeypatch.setenv("SUPABASE_URL", "https://test.supabase.co")
+    monkeypatch.setenv("SUPABASE_KEY", "test-supabase-key")
+    monkeypatch.setenv("REDDIT_CLIENT_ID", "test-reddit-client-id")
+    monkeypatch.setenv("REDDIT_CLIENT_SECRET", "test-reddit-secret")
+    monkeypatch.setenv("REDDIT_USER_AGENT", "AutoSO/test")
+    monkeypatch.setenv("WHITELISTED_USER_IDS", "12345")
 ```
 
 - [ ] **Step 2: Write failing test**
@@ -326,6 +349,30 @@ async def test_handler_return_value_preserved(authorized_update, mock_context):
         result = await handler(authorized_update, mock_context)
 
     assert result == "result"
+
+
+async def test_unauthorized_user_with_no_message_does_not_raise(mock_context):
+    """Callback queries have no update.message — must not AttributeError."""
+    update = MagicMock()
+    update.effective_user.id = 99999
+    update.message = None
+    update.effective_chat.id = 111
+
+    mock_context.bot = AsyncMock()
+    mock_context.bot.send_message = AsyncMock()
+
+    with patch("autoso.config.WHITELISTED_USER_IDS", {12345}):
+        from autoso.bot.auth import require_auth
+        called = []
+
+        @require_auth
+        async def handler(update, context):
+            called.append(True)
+
+        await handler(update, mock_context)
+
+    assert called == []
+    mock_context.bot.send_message.assert_called_once()
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -349,15 +396,22 @@ from telegram import Update
 from telegram.ext import ContextTypes
 import autoso.config as config
 
+_UNAUTH_MESSAGE = "Unauthorised. Contact the bot administrator to request access."
+
 
 def require_auth(handler):
     @wraps(handler)
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         if user_id not in config.WHITELISTED_USER_IDS:
-            await update.message.reply_text(
-                "Unauthorised. Contact the bot administrator to request access."
-            )
+            # update.message is None for callback queries and inline queries
+            if update.message:
+                await update.message.reply_text(_UNAUTH_MESSAGE)
+            elif update.effective_chat:
+                await context.bot.send_message(
+                    chat_id=update.effective_chat.id,
+                    text=_UNAUTH_MESSAGE,
+                )
             return
         return await handler(update, context)
     return wrapper
@@ -369,7 +423,7 @@ def require_auth(handler):
 pytest tests/test_auth.py -v
 ```
 
-Expected: 3 passed.
+Expected: 4 passed.
 
 - [ ] **Step 6: Commit**
 
@@ -392,14 +446,33 @@ No tests for this task — handlers call `run_pipeline` which doesn't exist yet;
 
 ```python
 # autoso/bot/handlers.py
+import asyncio
+import functools
 import logging
+from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import urlparse
+
 from telegram import Update
+from telegram.error import BadRequest
 from telegram.ext import ContextTypes
+
 from autoso.bot.auth import require_auth
 
 logger = logging.getLogger(__name__)
 
 TELEGRAM_MAX_LENGTH = 4096
+
+# Shared executor — pipeline runs (scrape + LLM) are CPU/IO-heavy synchronous work.
+# Running them in a thread pool keeps the event loop free for other Telegram updates.
+_pipeline_executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="pipeline")
+
+
+def _is_valid_url(text: str) -> bool:
+    try:
+        parsed = urlparse(text)
+        return parsed.scheme in ("http", "https") and bool(parsed.netloc)
+    except Exception:
+        return False
 
 
 @require_auth
@@ -430,15 +503,28 @@ async def _handle_analysis(
         return
 
     url = args[0]
+    if not _is_valid_url(url):
+        await update.message.reply_text(
+            f"Invalid URL: {url!r}\nUsage: /{mode} <url> [optional title]"
+        )
+        return
+
     provided_title = " ".join(args[1:]) if len(args) > 1 else None
 
     await update.message.reply_text("Processing... this may take a minute.")
 
     try:
-        # Imported here so Phase 1a works without Phase 1b installed
+        # Imported here so Phase 1a works without Phase 1b installed.
+        # run_pipeline is synchronous and calls Playwright + LLM — it must NOT
+        # run directly in the async handler (blocks the event loop). Dispatch to
+        # the thread-pool executor so the event loop stays responsive.
         from autoso.pipeline.pipeline import run_pipeline
 
-        result = run_pipeline(url=url, mode=mode, provided_title=provided_title)
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(
+            _pipeline_executor,
+            functools.partial(run_pipeline, url=url, mode=mode, provided_title=provided_title),
+        )
         output = result.output
 
         if len(output) > TELEGRAM_MAX_LENGTH:
@@ -453,7 +539,13 @@ async def _handle_analysis(
             )
             return
 
-        await update.message.reply_text(output, parse_mode="Markdown")
+        # Try Markdown formatting (titles use *bold*). Fall back to plain text if
+        # the LLM output contains characters that break Telegram's Markdown parser.
+        try:
+            await update.message.reply_text(output, parse_mode="Markdown")
+        except BadRequest:
+            logger.warning("Markdown parse failed for run_id=%s — sending plain text", result.run_id)
+            await update.message.reply_text(output)
 
     except Exception:
         logger.exception("Pipeline error for url=%s mode=%s", url, mode)
@@ -629,8 +721,16 @@ def test_detect_instagram():
     assert detect_platform("https://www.instagram.com/p/ABC123/") == "instagram"
 
 
+def test_detect_instagram_no_www():
+    assert detect_platform("https://instagram.com/p/ABC123/") == "instagram"
+
+
 def test_detect_facebook_full():
     assert detect_platform("https://www.facebook.com/groups/123/posts/456") == "facebook"
+
+
+def test_detect_facebook_mobile():
+    assert detect_platform("https://m.facebook.com/story.php?id=123") == "facebook"
 
 
 def test_detect_facebook_short():
@@ -640,6 +740,18 @@ def test_detect_facebook_short():
 def test_detect_unsupported_raises():
     with pytest.raises(ValueError, match="Unsupported platform"):
         detect_platform("https://twitter.com/x/status/1")
+
+
+def test_detect_does_not_false_positive_on_notfb_com():
+    """'fb.com' substring in a different domain must not match Facebook."""
+    with pytest.raises(ValueError, match="Unsupported platform"):
+        detect_platform("https://notfb.com/page")
+
+
+def test_detect_does_not_false_positive_on_subdomain_lookalike():
+    """A domain that ends in a platform name but isn't one must not match."""
+    with pytest.raises(ValueError, match="Unsupported platform"):
+        detect_platform("https://notreddit.com/r/test")
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -654,15 +766,24 @@ Expected: `ImportError`.
 
 ```python
 # autoso/scraping/base.py
-from autoso.scraping.models import Post
+from urllib.parse import urlparse
 
 
 def detect_platform(url: str) -> str:
-    if "reddit.com" in url:
+    """Detect the social platform from a URL.
+
+    Uses hostname matching (not substring-in-full-URL) to avoid false positives
+    such as "notfb.com" matching the naive '"fb.com" in url' check.
+    """
+    hostname = urlparse(url).hostname or ""
+    # Strip leading "www." / "m." for uniform matching
+    bare = hostname.removeprefix("www.").removeprefix("m.")
+
+    if bare == "reddit.com" or bare.endswith(".reddit.com"):
         return "reddit"
-    if "instagram.com" in url:
+    if bare == "instagram.com" or bare.endswith(".instagram.com"):
         return "instagram"
-    if "facebook.com" in url or "fb.com" in url:
+    if bare == "facebook.com" or bare.endswith(".facebook.com") or bare == "fb.com":
         return "facebook"
     raise ValueError(f"Unsupported platform for URL: {url}")
 
@@ -679,6 +800,8 @@ def get_scraper(url: str):
     if platform == "facebook":
         from autoso.scraping.facebook import FacebookScraper
         return FacebookScraper()
+    # detect_platform raises ValueError for unknowns, so this is unreachable
+    raise ValueError(f"No scraper registered for platform: {platform}")
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -687,7 +810,7 @@ def get_scraper(url: str):
 pytest tests/test_scraping/test_base.py -v
 ```
 
-Expected: 5 passed.
+Expected: 9 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -780,6 +903,43 @@ def test_scrape_uses_title_as_content_when_no_selftext(mock_reddit_cls):
     post = scraper.scrape("https://www.reddit.com/r/test/comments/xyz")
 
     assert post.content == "Link Post Title"
+
+
+@patch("autoso.scraping.reddit.praw.Reddit")
+def test_scrape_keeps_comment_starting_with_deleted_word_in_context(mock_reddit_cls):
+    """A real comment that starts with the word 'deleted' in context must NOT be filtered."""
+    raw_comments = [
+        _make_mock_comment("[deleted] is a common meme response", "c1", 0),  # should be filtered
+        _make_mock_comment("The deleted scene was actually good", "c2", 1),  # must be kept
+    ]
+    sub = _make_mock_submission("Post", "body", raw_comments)
+    mock_reddit_cls.return_value.submission.return_value = sub
+
+    scraper = RedditScraper()
+    post = scraper.scrape("https://www.reddit.com/r/test/comments/xyz")
+
+    texts = [c.text for c in post.comments]
+    assert "[deleted] is a common meme response" not in texts  # exact match filtered
+    assert "The deleted scene was actually good" in texts       # partial match kept
+
+
+@patch("autoso.scraping.reddit.praw.Reddit")
+def test_scrape_positions_are_sequential_after_filtering(mock_reddit_cls):
+    """Positions must be 0-indexed and contiguous after deleted comments are dropped."""
+    raw_comments = [
+        _make_mock_comment("[deleted]", "d1", 0),
+        _make_mock_comment("First real comment", "c1", 1),
+        _make_mock_comment("Second real comment", "c2", 2),
+    ]
+    sub = _make_mock_submission("Post", "body", raw_comments)
+    mock_reddit_cls.return_value.submission.return_value = sub
+
+    scraper = RedditScraper()
+    post = scraper.scrape("https://www.reddit.com/r/test/comments/xyz")
+
+    assert len(post.comments) == 2
+    assert post.comments[0].position == 1  # position reflects original list index
+    assert post.comments[1].position == 2
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -814,7 +974,7 @@ class RedditScraper:
 
         comments = []
         for i, c in enumerate(submission.comments.list()[:limit]):
-            if c.body.startswith("[deleted]") or c.body.startswith("[removed]"):
+            if c.body in ("[deleted]", "[removed]"):
                 continue
             comments.append(
                 Comment(
@@ -840,7 +1000,7 @@ class RedditScraper:
 pytest tests/test_scraping/test_reddit.py -v
 ```
 
-Expected: 3 passed.
+Expected: 6 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -868,7 +1028,10 @@ import random
 from pathlib import Path
 from playwright.async_api import async_playwright, Browser, BrowserContext
 
-SESSION_DIR = Path("./data/sessions")
+# Absolute path anchored to the project root (two levels above this file's package).
+# Using a relative "./data/sessions" would break if the process is started from any
+# directory other than the project root.
+SESSION_DIR = Path(__file__).parent.parent.parent / "data" / "sessions"
 
 
 class PlaywrightScraper:
@@ -998,94 +1161,145 @@ git commit -m "feat: add Playwright base scraper with cookie session management"
 ```python
 # tests/test_scraping/test_instagram.py
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from autoso.scraping.instagram import InstagramScraper
 from autoso.scraping.models import Post
 
 
-def _make_page_mock(post_text: str, comment_texts: list[str]) -> MagicMock:
-    page = AsyncMock()
-
-    # post content locator
-    post_el = AsyncMock()
-    post_el.inner_text = AsyncMock(return_value=post_text)
-    page.locator.return_value.first = post_el
-
-    # og:title meta
-    title_el = AsyncMock()
-    title_el.get_attribute = AsyncMock(return_value="IG Post Title")
-    page.locator.return_value = title_el
-
-    # comment count and texts
-    comment_locator = AsyncMock()
-    comment_locator.count = AsyncMock(return_value=len(comment_texts))
-
-    async def nth_text(i):
-        el = AsyncMock()
-        el.inner_text = AsyncMock(return_value=comment_texts[i])
-        return el
-
-    comment_locator.nth = AsyncMock(side_effect=lambda i: _make_text_el(comment_texts[i]))
-
-    return page
-
-
-def _make_text_el(text: str):
+def _make_text_el(text: str) -> AsyncMock:
     el = AsyncMock()
     el.inner_text = AsyncMock(return_value=text)
     return el
 
 
+def _make_locator_for(texts: list[str]) -> AsyncMock:
+    """Return a mock locator whose .nth(i).inner_text() yields texts[i]."""
+    loc = AsyncMock()
+    loc.count = AsyncMock(return_value=len(texts))
+    loc.nth.side_effect = lambda i: _make_text_el(texts[i])
+    return loc
+
+
+def _build_page_mock(
+    post_content: str,
+    og_title: str,
+    comment_texts: list[str],
+    load_more_visible: bool = False,
+) -> AsyncMock:
+    """
+    Build a fully-wired page mock without mixing side_effect and return_value
+    on the same locator mock (which would cause the return_value to be silently
+    ignored).  Instead we use a single side_effect dispatch table keyed by the
+    selector string.
+    """
+    page = AsyncMock()
+
+    # post content: article ... span selector → .first.inner_text()
+    post_el = AsyncMock()
+    post_el.inner_text = AsyncMock(return_value=post_content)
+    post_loc = AsyncMock()
+    post_loc.first = post_el
+
+    # og:title: meta[property='og:title'] → .get_attribute("content")
+    title_el = AsyncMock()
+    title_el.get_attribute = AsyncMock(return_value=og_title)
+    title_loc = AsyncMock()
+    # locator returns the element directly (no .first needed for meta)
+    title_loc.__aiter__ = AsyncMock(return_value=iter([title_el]))
+    # _extract_post_title calls page.locator(selector) and then get_attribute
+    # on the returned locator object itself
+    title_loc.get_attribute = AsyncMock(return_value=og_title)
+
+    # comments: article ul li span[dir='auto'] → .count() / .nth(i)
+    comment_loc = _make_locator_for(comment_texts)
+
+    selector_map = {
+        "article h1, article div[data-testid='post-content'], article span": post_loc,
+        "meta[property='og:title']": title_loc,
+        "article ul li span[dir='auto']": comment_loc,
+    }
+
+    def locator_side_effect(selector):
+        return selector_map.get(selector, AsyncMock())
+
+    page.locator.side_effect = locator_side_effect
+
+    # _expand_comments: get_by_text("Load more comments").first.is_visible()
+    load_more = AsyncMock()
+    load_more.is_visible = AsyncMock(return_value=load_more_visible)
+    page.get_by_text.return_value.first = load_more
+
+    return page
+
+
 @pytest.mark.asyncio
 @patch("autoso.scraping.instagram.async_playwright")
 @patch("autoso.scraping.instagram.stealth_async", new_callable=AsyncMock)
-async def test_scrape_returns_post_with_comments(mock_stealth, mock_pw):
-    """InstagramScraper._scrape_async returns a Post with platform='instagram'."""
+async def test_scrape_returns_post_with_correct_platform(mock_stealth, mock_pw):
+    """_scrape_async returns a Post with platform='instagram' and correct URL."""
     scraper = InstagramScraper()
-    comments = ["Great photo!", "Love this", "Amazing content from the SAF event"]
+    comment_texts = [
+        "Great photo from the SAF exercise!",
+        "Really proud of our NSmen",
+        "Amazing bilateral relations event",
+    ]
+    mock_page = _build_page_mock(
+        post_content="SAF event post body",
+        og_title="SAF Event",
+        comment_texts=comment_texts,
+    )
 
     mock_browser = AsyncMock()
     mock_context = AsyncMock()
-    mock_page = AsyncMock()
+    mock_context.storage_state = AsyncMock(return_value={})
     mock_pw.return_value.__aenter__ = AsyncMock(return_value=mock_pw.return_value)
     mock_pw.return_value.__aexit__ = AsyncMock(return_value=False)
     mock_pw.return_value.chromium.launch = AsyncMock(return_value=mock_browser)
     mock_browser.new_context = AsyncMock(return_value=mock_context)
     mock_context.new_page = AsyncMock(return_value=mock_page)
-    mock_context.storage_state = AsyncMock(return_value={})
 
-    # _extract_post_content
-    post_el = AsyncMock()
-    post_el.inner_text = AsyncMock(return_value="SAF event post")
-
-    # _extract_post_title  
-    title_el = AsyncMock()
-    title_el.get_attribute = AsyncMock(return_value="SAF Event")
-
-    def locator_side_effect(selector):
-        loc = AsyncMock()
-        loc.first = post_el if "span" in selector else title_el
-        return loc
-
-    mock_page.locator.side_effect = locator_side_effect
-
-    # _expand_comments — load_more not visible
-    load_more = AsyncMock()
-    load_more.is_visible = AsyncMock(return_value=False)
-    mock_page.get_by_text.return_value.first = load_more
-
-    # _extract_comments
-    comment_loc = AsyncMock()
-    comment_loc.count = AsyncMock(return_value=len(comments))
-    comment_loc.nth.side_effect = lambda i: _make_text_el(comments[i])
-    # Override locator for comment extraction
-    mock_page.locator.return_value = comment_loc
-
-    post = await scraper._scrape_async("https://www.instagram.com/p/ABC123/")
+    url = "https://www.instagram.com/p/ABC123/"
+    post = await scraper._scrape_async(url)
 
     assert isinstance(post, Post)
     assert post.platform == "instagram"
-    assert post.url == "https://www.instagram.com/p/ABC123/"
+    assert post.url == url
+
+
+@pytest.mark.asyncio
+@patch("autoso.scraping.instagram.async_playwright")
+@patch("autoso.scraping.instagram.stealth_async", new_callable=AsyncMock)
+async def test_scrape_extracts_comments(mock_stealth, mock_pw):
+    """Comments longer than 10 chars are extracted into the Post."""
+    scraper = InstagramScraper()
+    comment_texts = [
+        "NS training builds character and discipline",
+        "SAF personnel were very professional",
+        "ok",  # too short, must be filtered out
+    ]
+    mock_page = _build_page_mock(
+        post_content="Post body",
+        og_title="Title",
+        comment_texts=comment_texts,
+    )
+
+    mock_browser = AsyncMock()
+    mock_context = AsyncMock()
+    mock_context.storage_state = AsyncMock(return_value={})
+    mock_pw.return_value.__aenter__ = AsyncMock(return_value=mock_pw.return_value)
+    mock_pw.return_value.__aexit__ = AsyncMock(return_value=False)
+    mock_pw.return_value.chromium.launch = AsyncMock(return_value=mock_browser)
+    mock_browser.new_context = AsyncMock(return_value=mock_context)
+    mock_context.new_page = AsyncMock(return_value=mock_page)
+
+    post = await scraper._scrape_async("https://www.instagram.com/p/XYZ/")
+
+    # "ok" is 2 chars — below the 10-char threshold — must be dropped
+    extracted_texts = [c.text for c in post.comments]
+    assert "NS training builds character and discipline" in extracted_texts
+    assert "SAF personnel were very professional" in extracted_texts
+    assert "ok" not in extracted_texts
+    assert len(post.comments) == 2
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -1196,7 +1410,7 @@ class InstagramScraper(PlaywrightScraper):
 pytest tests/test_scraping/test_instagram.py -v
 ```
 
-Expected: 1 passed.
+Expected: 2 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -1414,12 +1628,15 @@ from autoso.scraping.instagram import InstagramScraper
 from autoso.scraping.facebook import FacebookScraper
 
 
-def test_factory_returns_reddit_scraper():
+@patch("autoso.scraping.reddit.praw.Reddit")
+def test_factory_returns_reddit_scraper(mock_reddit):
+    # RedditScraper.__init__ calls praw.Reddit() — mock it so no live connection
     s = get_scraper("https://www.reddit.com/r/singapore/comments/abc")
     assert isinstance(s, RedditScraper)
 
 
 def test_factory_returns_instagram_scraper():
+    # InstagramScraper has no __init__ side effects (Playwright is lazy)
     s = get_scraper("https://www.instagram.com/p/ABC123/")
     assert isinstance(s, InstagramScraper)
 
@@ -1427,6 +1644,12 @@ def test_factory_returns_instagram_scraper():
 def test_factory_returns_facebook_scraper():
     s = get_scraper("https://www.facebook.com/mindef/posts/123")
     assert isinstance(s, FacebookScraper)
+
+
+def test_factory_raises_for_unsupported_url():
+    import pytest
+    with pytest.raises(ValueError, match="Unsupported platform"):
+        get_scraper("https://twitter.com/mindef/status/1")
 ```
 
 - [ ] **Step 2: Run factory tests**
@@ -1435,7 +1658,7 @@ def test_factory_returns_facebook_scraper():
 pytest tests/test_scraping/test_factory.py -v
 ```
 
-Expected: 3 passed.
+Expected: 4 passed.
 
 - [ ] **Step 3: Run full suite**
 

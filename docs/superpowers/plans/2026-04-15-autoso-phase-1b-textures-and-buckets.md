@@ -305,25 +305,45 @@ def test_ingest_creates_persistent_index(tmp_path, monkeypatch):
         os.unlink(doc_path)
 
 
-def test_ingest_is_idempotent(tmp_path, monkeypatch):
-    """Re-ingesting the same doc replaces the old index, not append."""
-    monkeypatch.setattr("autoso.config.CHROMADB_PATH", str(tmp_path))
-    from autoso.pipeline.holy_grail import ingest_holy_grail, load_holy_grail
+def test_ingest_is_idempotent_no_append(tmp_path, monkeypatch):
+    """Re-ingesting the same doc must replace the collection, not append to it.
 
-    doc_path = _write_temp_doc("Positive: Praised SAF capability")
+    Verified by checking the ChromaDB collection count directly — if documents
+    were appended the count would double on the second ingest.
+    """
+    import chromadb as _chromadb
+    monkeypatch.setattr("autoso.config.CHROMADB_PATH", str(tmp_path))
+    from autoso.pipeline.holy_grail import ingest_holy_grail
+
+    doc_path = _write_temp_doc("Positive: Praised SAF capability\nNeutral: Discussed NS\n")
     try:
         ingest_holy_grail(doc_path)
-        ingest_holy_grail(doc_path)  # second call must not raise
-        index = load_holy_grail()
-        assert index is not None
+        count_after_first = (
+            _chromadb.PersistentClient(path=str(tmp_path))
+            .get_collection("bucket_holy_grail")
+            .count()
+        )
+
+        ingest_holy_grail(doc_path)  # second call — must replace, not append
+        count_after_second = (
+            _chromadb.PersistentClient(path=str(tmp_path))
+            .get_collection("bucket_holy_grail")
+            .count()
+        )
+
+        assert count_after_first > 0
+        assert count_after_second == count_after_first  # not doubled
     finally:
         os.unlink(doc_path)
 
 
-def test_load_raises_if_not_ingested(tmp_path, monkeypatch):
+def test_load_raises_runtime_error_if_not_ingested(tmp_path, monkeypatch):
+    """load_holy_grail raises RuntimeError (not a raw ChromaDB exception) when
+    the collection has never been ingested. RuntimeError is the stable contract;
+    ChromaDB's internal exception type has changed across versions."""
     monkeypatch.setattr("autoso.config.CHROMADB_PATH", str(tmp_path))
     from autoso.pipeline.holy_grail import load_holy_grail
-    with pytest.raises(Exception):
+    with pytest.raises(RuntimeError, match="not found"):
         load_holy_grail()
 ```
 
@@ -360,8 +380,11 @@ def ingest_holy_grail(file_path: str) -> VectorStoreIndex:
     client = _get_client()
     try:
         client.delete_collection(_COLLECTION_NAME)
-    except ValueError:
-        pass  # collection did not exist — fine
+    except Exception:
+        # Collection did not exist yet — fine. We catch Exception broadly because
+        # ChromaDB has raised both ValueError and InvalidCollectionException across
+        # different versions for a missing collection.
+        pass
 
     collection = client.create_collection(_COLLECTION_NAME)
     vector_store = ChromaVectorStore(chroma_collection=collection)
@@ -374,9 +397,20 @@ def ingest_holy_grail(file_path: str) -> VectorStoreIndex:
 
 
 def load_holy_grail() -> VectorStoreIndex:
-    """Load the existing Holy Grail index. Raises if not yet ingested."""
+    """Load the existing Holy Grail index.
+
+    Raises RuntimeError if the Holy Grail has not been ingested yet. RuntimeError
+    is the stable public contract — callers must not depend on ChromaDB's internal
+    exception type, which has changed across versions.
+    """
     client = _get_client()
-    collection = client.get_collection(_COLLECTION_NAME)  # raises ValueError if missing
+    try:
+        collection = client.get_collection(_COLLECTION_NAME)
+    except Exception as exc:
+        raise RuntimeError(
+            "Holy Grail index not found. "
+            "Run: python scripts/ingest_holy_grail.py <path_to_document>"
+        ) from exc
     vector_store = ChromaVectorStore(chroma_collection=collection)
     storage_context = StorageContext.from_defaults(vector_store=vector_store)
     return VectorStoreIndex.from_vector_store(
