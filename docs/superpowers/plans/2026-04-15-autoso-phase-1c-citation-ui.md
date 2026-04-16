@@ -49,7 +49,17 @@ from fastapi.testclient import TestClient
 
 
 def _mock_supabase(analysis: dict, citations: list[dict]):
-    """Return a mock Supabase client that returns the given data."""
+    """Return a mock Supabase client that returns the given data.
+
+    IMPORTANT: The two query chains (.table("analyses")... and .table("citations")...)
+    share the same MagicMock return_value because MagicMock always returns the same
+    child mock for the same attribute. This works here because the test only asserts
+    on the final HTML output, not on individual Supabase calls. The citations chain
+    has .order() which the analyses chain doesn't, so the mock routing diverges at
+    that point — but the .single() call on analyses and the .order() call on citations
+    both ultimately resolve to the same mock tree. If tests become flaky, switch to
+    side_effect dispatch keyed on table name.
+    """
     client = MagicMock()
 
     # analyses query chain: .table().select().eq().single().execute()
@@ -300,12 +310,16 @@ import re as _re
 
 
 def _render_citations(text: str) -> str:
-    """Convert [N] markers in output_cited to clickable <span> elements."""
+    """Convert [N] markers in output_cited to clickable <span> elements.
+
+    HTML-escapes the text first to prevent XSS from LLM-generated content,
+    then converts newlines and citation markers to HTML.
+    """
     if not text:
         return ""
-    # Convert newlines to <br>
+    from markupsafe import escape
+    text = str(escape(text))
     text = text.replace("\n", "<br>\n")
-    # Wrap [N] in a clickable span
     text = _re.sub(
         r"\[(\d+)\]",
         r'<span class="citation-ref" data-citation="\1" onclick="highlightCitation(\1)">[\1]</span>',
@@ -343,9 +357,16 @@ templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 
 
 def _render_citations(text: str) -> str:
-    """Convert [N] citation markers to clickable <span> elements."""
+    """Convert [N] citation markers to clickable <span> elements.
+
+    IMPORTANT: HTML-escape the text FIRST to prevent XSS from LLM output,
+    then convert [N] markers and newlines. The `| safe` filter in the
+    template trusts this function's output — we must earn that trust.
+    """
     if not text:
         return ""
+    from markupsafe import escape
+    text = str(escape(text))
     text = text.replace("\n", "<br>\n")
     text = _re.sub(
         r"\[(\d+)\]",

@@ -65,6 +65,7 @@ dependencies = [
     "llama-index-core>=0.12.46",
     "llama-index-llms-anthropic>=0.7.6",
     "llama-index-llms-ollama>=0.4.0",
+    "llama-index-embeddings-huggingface>=0.5.0",
     "llama-index-vector-stores-chroma>=0.4.0",
     "chromadb>=0.6.0",
     "praw>=7.7.0",
@@ -75,6 +76,7 @@ dependencies = [
     "openai-whisper>=20231117",
     "yt-dlp>=2024.1.0",
     "python-docx>=1.1.0",
+    "pydub>=0.25.1",
     "fastapi>=0.109.0",
     "uvicorn>=0.27.0",
     "jinja2>=3.1.0",
@@ -85,6 +87,7 @@ dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
     "pytest-mock>=3.12.0",
+    "httpx>=0.27.0",
 ]
 
 [tool.pytest.ini_options]
@@ -121,15 +124,55 @@ CHROMADB_PATH=./data/chromadb
 USE_OLLAMA=false
 OLLAMA_MODEL=llama3.2
 CLAUDE_MODEL=claude-sonnet-4-6
+
+# Proxy (residential/ISP — required for IG/FB scraping)
+# Leave empty to disable proxy
+PROXY_URL=
+
+# Citation UI base URL (used in Telegram overflow messages)
+CITATION_UI_BASE_URL=http://localhost:8000
 ```
 
-- [ ] **Step 3: Create `data/.gitkeep`**
+- [ ] **Step 3: Create `.gitignore`**
+
+```gitignore
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Environment
+.env
+.env.local
+
+# Data (sessions, chromadb, downloads)
+data/chromadb/
+data/sessions/
+
+# IDE
+.vscode/
+.idea/
+
+# Test / Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# OS
+.DS_Store
+Thumbs.db
+```
+
+- [ ] **Step 4: Create `data/.gitkeep`**
 
 ```bash
 touch data/.gitkeep
 ```
 
-- [ ] **Step 4: Install dependencies**
+- [ ] **Step 5: Install dependencies**
 
 ```bash
 pip install -e ".[dev]"
@@ -138,10 +181,10 @@ playwright install chromium
 
 Expected: All packages install without error.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add pyproject.toml .env.example data/.gitkeep
+git add pyproject.toml .env.example .gitignore data/.gitkeep
 git commit -m "chore: initialise project skeleton"
 ```
 
@@ -165,24 +208,45 @@ touch autoso/__init__.py
 
 - [ ] **Step 1b: Create `tests/conftest.py`**
 
-All tests share this fixture. It patches the required env vars at session scope so importing any `autoso.*` module never raises `KeyError` in CI or a fresh checkout.
+**IMPORTANT:** `autoso/config.py` reads `os.environ[]` at module import time — i.e., during
+pytest *collection*, before any fixtures run. If env vars are only set inside a fixture,
+any test file that transitively imports `autoso.config` at the top level will KeyError
+in CI. The fix is two layers:
+
+1. **Module-level `os.environ.setdefault`** at the top of conftest — runs at collection
+   time, before any imports of `autoso.*` modules.
+2. **`monkeypatch` fixture** for per-test isolation (e.g., tests that reload config with
+   different values).
 
 ```python
 # tests/conftest.py
+import os
+
+# ── Layer 1: Set defaults at collection time ──────────────────────────
+# These run before pytest collects test modules, so transitive imports
+# of autoso.config never hit a missing key.
+_TEST_DEFAULTS = {
+    "TELEGRAM_TOKEN": "test-telegram-token",
+    "ANTHROPIC_API_KEY": "test-anthropic-key",
+    "SUPABASE_URL": "https://test.supabase.co",
+    "SUPABASE_KEY": "test-supabase-key",
+    "REDDIT_CLIENT_ID": "test-reddit-client-id",
+    "REDDIT_CLIENT_SECRET": "test-reddit-secret",
+    "REDDIT_USER_AGENT": "AutoSO/test",
+    "WHITELISTED_USER_IDS": "12345",
+}
+for key, val in _TEST_DEFAULTS.items():
+    os.environ.setdefault(key, val)
+
+# ── Layer 2: Per-test fixture for isolation ───────────────────────────
 import pytest
 
 
 @pytest.fixture(autouse=True)
 def _required_env_vars(monkeypatch):
-    """Patch all mandatory config env vars so module imports never KeyError."""
-    monkeypatch.setenv("TELEGRAM_TOKEN", "test-telegram-token")
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
-    monkeypatch.setenv("SUPABASE_URL", "https://test.supabase.co")
-    monkeypatch.setenv("SUPABASE_KEY", "test-supabase-key")
-    monkeypatch.setenv("REDDIT_CLIENT_ID", "test-reddit-client-id")
-    monkeypatch.setenv("REDDIT_CLIENT_SECRET", "test-reddit-secret")
-    monkeypatch.setenv("REDDIT_USER_AGENT", "AutoSO/test")
-    monkeypatch.setenv("WHITELISTED_USER_IDS", "12345")
+    """Re-apply test defaults via monkeypatch so they auto-revert after each test."""
+    for key, val in _TEST_DEFAULTS.items():
+        monkeypatch.setenv(key, val)
 ```
 
 - [ ] **Step 2: Write failing test**
@@ -257,6 +321,9 @@ CHROMADB_PATH: str = os.environ.get("CHROMADB_PATH", "./data/chromadb")
 USE_OLLAMA: bool = os.environ.get("USE_OLLAMA", "false").lower() == "true"
 OLLAMA_MODEL: str = os.environ.get("OLLAMA_MODEL", "llama3.2")
 CLAUDE_MODEL: str = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6")
+
+PROXY_URL: str | None = os.environ.get("PROXY_URL") or None
+CITATION_UI_BASE_URL: str = os.environ.get("CITATION_UI_BASE_URL", "http://localhost:8000")
 ```
 
 - [ ] **Step 5: Run test to verify it passes**
@@ -270,7 +337,7 @@ Expected: 2 passed.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add autoso/__init__.py autoso/config.py tests/__init__.py tests/test_config.py
+git add autoso/__init__.py autoso/config.py tests/__init__.py tests/conftest.py tests/test_config.py
 git commit -m "feat: add config module with whitelist parsing"
 ```
 
@@ -528,15 +595,28 @@ async def _handle_analysis(
         output = result.output
 
         if len(output) > TELEGRAM_MAX_LENGTH:
+            from autoso.config import CITATION_UI_BASE_URL
+
             logger.error(
                 "Output exceeds Telegram limit: %d chars, run_id=%s",
                 len(output),
                 result.run_id,
             )
+            # CITATION_UI_BASE_URL may point to a server that isn't running yet
+            # (Phase 1c builds the Citation UI). Include the link if configured,
+            # but always truncate the output as a fallback so the user gets something.
+            truncated = output[: TELEGRAM_MAX_LENGTH - 200] + "\n\n[...truncated]"
+            ui_msg = ""
+            if CITATION_UI_BASE_URL:
+                ui_msg = f"\nFull output with citations: {CITATION_UI_BASE_URL}/{result.run_id}"
+
             await update.message.reply_text(
-                f"Analysis complete but output is too long ({len(output)} characters). "
-                f"View full output in the web UI (run ID: {result.run_id})."
+                f"Output is {len(output)} chars (Telegram limit is {TELEGRAM_MAX_LENGTH}).{ui_msg}"
             )
+            try:
+                await update.message.reply_text(truncated, parse_mode="Markdown")
+            except BadRequest:
+                await update.message.reply_text(truncated)
             return
 
         # Try Markdown formatting (titles use *bold*). Fall back to plain text if
@@ -662,6 +742,17 @@ touch autoso/scraping/__init__.py tests/test_scraping/__init__.py
 # autoso/scraping/models.py
 from dataclasses import dataclass, field
 from typing import List
+
+
+class ScrapeError(Exception):
+    """Base exception for scraping failures with classified cause.
+
+    cause values: "auth_wall" | "proxy" | "selector_drift" | "rate_limit" | "timeout" | "unknown"
+    The pipeline/handler layer uses `cause` to decide whether to retry or surface to the user.
+    """
+    def __init__(self, message: str, cause: str = "unknown"):
+        super().__init__(message)
+        self.cause = cause
 
 
 @dataclass
@@ -1027,6 +1118,7 @@ import json
 import random
 from pathlib import Path
 from playwright.async_api import async_playwright, Browser, BrowserContext
+import autoso.config as config
 
 # Absolute path anchored to the project root (two levels above this file's package).
 # Using a relative "./data/sessions" would break if the process is started from any
@@ -1039,6 +1131,13 @@ class PlaywrightScraper:
         self.platform = platform
         self._session_file = SESSION_DIR / f"{platform}_session.json"
         SESSION_DIR.mkdir(parents=True, exist_ok=True)
+
+    def _launch_kwargs(self) -> dict:
+        """Build kwargs for browser.launch(), including proxy if configured."""
+        kwargs: dict = {"headless": True}
+        if config.PROXY_URL:
+            kwargs["proxy"] = {"server": config.PROXY_URL}
+        return kwargs
 
     async def _get_context(self, browser: Browser) -> BrowserContext:
         storage_state = None
@@ -1319,7 +1418,7 @@ from typing import List
 from playwright.async_api import async_playwright
 from playwright_stealth import stealth_async
 from autoso.scraping.playwright_base import PlaywrightScraper
-from autoso.scraping.models import Comment, Post
+from autoso.scraping.models import Comment, Post, ScrapeError
 
 
 class InstagramScraper(PlaywrightScraper):
@@ -1331,13 +1430,24 @@ class InstagramScraper(PlaywrightScraper):
 
     async def _scrape_async(self, url: str) -> Post:
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
+            browser = await p.chromium.launch(**self._launch_kwargs())
             context = await self._get_context(browser)
             page = await context.new_page()
             await stealth_async(page)
 
-            await page.goto(url, wait_until="networkidle", timeout=30_000)
+            try:
+                await page.goto(url, wait_until="networkidle", timeout=30_000)
+            except Exception as exc:
+                raise ScrapeError(f"Page load failed: {exc}", cause="timeout")
+
             await self._human_delay(1000, 3000)
+
+            # Classify login wall: IG redirects to /accounts/login/ when not authenticated
+            if "/accounts/login" in page.url:
+                raise ScrapeError(
+                    f"Login wall detected — session cookies may be expired for {url}",
+                    cause="auth_wall",
+                )
 
             post_content = await self._extract_post_content(page)
             post_title = await self._extract_post_title(page, url)
@@ -1502,7 +1612,7 @@ from typing import List
 from playwright.async_api import async_playwright
 from playwright_stealth import stealth_async
 from autoso.scraping.playwright_base import PlaywrightScraper
-from autoso.scraping.models import Comment, Post
+from autoso.scraping.models import Comment, Post, ScrapeError
 
 
 class FacebookScraper(PlaywrightScraper):
@@ -1514,13 +1624,24 @@ class FacebookScraper(PlaywrightScraper):
 
     async def _scrape_async(self, url: str) -> Post:
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
+            browser = await p.chromium.launch(**self._launch_kwargs())
             context = await self._get_context(browser)
             page = await context.new_page()
             await stealth_async(page)
 
-            await page.goto(url, wait_until="networkidle", timeout=30_000)
+            try:
+                await page.goto(url, wait_until="networkidle", timeout=30_000)
+            except Exception as exc:
+                raise ScrapeError(f"Page load failed: {exc}", cause="timeout")
+
             await self._human_delay(1000, 3000)
+
+            # Classify FB login wall
+            if "/login" in page.url or "must log in" in (await page.content()).lower():
+                raise ScrapeError(
+                    f"Login wall detected — session cookies may be expired for {url}",
+                    cause="auth_wall",
+                )
 
             post_content = await self._extract_post_content(page)
             post_title = await self._extract_post_title(page, url)

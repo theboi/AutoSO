@@ -345,6 +345,7 @@ Pre-emptives are pos 3, neu 5, neg 8, neg 9
 |Comment scraping — IG/FB |Phase 1a spike (see Section 7)               |⏳ TBD                                     |
 |Video download           |`yt-dlp`                                     |✅ Confirmed                               |
 |Transcription engine     |OpenAI Whisper v1                            |✅ Confirmed (upgrade tracked)             |
+|Proxy (IG/FB)            |Residential/ISP proxy via `PROXY_URL` env var|✅ Confirmed — required for IG/FB, optional otherwise|
 |Hosting — MVP            |**MacBook** (local, developer machine)       |✅ Confirmed                               |
 |Hosting — next           |**Mac Mini** (always-on, persistent sessions)|✅ Confirmed                               |
 
@@ -393,6 +394,8 @@ Pre-emptives are pos 3, neu 5, neg 8, neg 9
 |-|-----------------------------------|-----------------|-----------------------------------------------------------------------------------------------------|
 |1|**Bucket Holy Grail document**     |ASO lead          |Upload via Claude Code session. Ingest into ChromaDB. Define re-ingestion trigger for future updates.|
 |2|**Pre-emptive format confirmation**|Product owner/SO |Confirm `Pre-emptives are pos X, neu Y, neg Z` is the final trailing line format for Buckets output. |
+|3|**`CITATION_UI_BASE_URL` for Mac Mini**|Ryan          |Default `localhost:8000` is only reachable from the host machine. Set to LAN IP or use a tunnel (ngrok/Tailscale) when deploying to Mac Mini so Telegram overflow links work for external users.|
+|4|**FFmpeg on deployment target**    |Ryan              |Whisper + pydub require FFmpeg. Ensure it's installed on both MacBook and Mac Mini before Phase 1d.  |
 
 -----
 
@@ -413,7 +416,9 @@ Pre-emptives are pos 3, neu 5, neg 8, neg 9
 |Output format — Feature A       |✅ Plain Telegram text (no citation markers)                                                              |
 |Output format — Feature B       |✅ DOCX                                                                                                   |
 |Citation UI                     |✅ Phase 1c (before transcription), NotebookLM-style side-by-side web UI                                  |
+|Citation UI auth                |⚠️ None — publicly accessible by URL. Acceptable for MVP (internal network). Track for Phase 2.          |
 |RAG framework                   |✅ LlamaIndex                                                                                             |
+|Embedding model                 |✅ HuggingFace BAAI/bge-small-en-v1.5 (local, free — avoids OpenAI dependency)                            |
 |LLM                             |✅ Claude API; Ollama for local dev                                                                       |
 |Vector store — MVP              |✅ ChromaDB (local file-based)                                                                            |
 |Vector store — Mac Mini+        |✅ Supabase pgvector (migrate when moving off MacBook)                                                    |
@@ -425,6 +430,20 @@ Pre-emptives are pos 3, neu 5, neg 8, neg 9
 |Transcription priority          |✅ Deprioritised to Phase 1d                                                                              |
 |Hosting — MVP                   |✅ MacBook (local)                                                                                        |
 |Hosting — next                  |✅ Mac Mini (persistent, always-on)                                                                       |
+|Embedding model                 |✅ HuggingFace BAAI/bge-small-en-v1.5 — local, free, avoids OpenAI API key dependency                     |
+|Proxy configuration             |✅ `PROXY_URL` env var passed to Playwright's browser launch. Empty = no proxy.                            |
+|Citation UI auth                |⚠️ None for MVP. Acceptable on internal network. Tracked for Phase 2.                                     |
+|Citation UI link from Telegram  |✅ Telegram overflow message includes `{CITATION_UI_BASE_URL}/{run_id}` link                              |
+|System prompt delivery          |✅ Passed via CitationQueryEngine's `text_qa_template`, not mixed into the query string                    |
+|XSS in Citation UI              |✅ `_render_citations` HTML-escapes LLM output before inserting into template                              |
+|Event loop safety               |✅ All blocking handlers (texture, bucket, transcribe) use `run_in_executor` to avoid blocking the loop    |
+|Thread safety — LLM config      |✅ `configure_llm()` uses double-checked locking (`threading.Lock`) — safe with `max_workers=3` executor   |
+|System prompt — Claude compat   |✅ QA template uses `INSTRUCTIONS:` header, not `<<SYS>>`/`<</SYS>>` (Llama-2 tags that Claude ignores)   |
+|Empty scrape guard              |✅ `run_pipeline` raises `RuntimeError` if scraper returns 0 comments — no silent garbage output           |
+|Scraper failure classification  |✅ `ScrapeError(cause=...)` in `models.py` — auth_wall, proxy, selector_drift, rate_limit, timeout, unknown|
+|Overflow handler — Phase 1c gap |✅ Telegram overflow sends truncated output as fallback; Citation UI link only if `CITATION_UI_BASE_URL` set|
+|Whisper model caching           |✅ `_get_model()` caches loaded model in module-level dict — avoids 2-5s reload on every transcription     |
+|Citation UI — `CITATION_UI_BASE_URL`|⚠️ Default `localhost:8000` won't work for external users. Must be set to LAN IP or tunnel URL on Mac Mini.|
 
 -----
 

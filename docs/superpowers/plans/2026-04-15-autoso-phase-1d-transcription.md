@@ -257,7 +257,7 @@ def test_transcribe_returns_text_and_language(tmp_path):
     fake_audio = tmp_path / "audio.mp3"
     fake_audio.write_bytes(b"fake audio")
 
-    with patch("autoso.transcription.transcriber.whisper.load_model") as mock_load, \
+    with patch("autoso.transcription.transcriber._get_model") as mock_load, \
          patch("autoso.transcription.transcriber._split_audio_if_needed", return_value=[str(fake_audio)]):
         mock_load.return_value = _make_model_mock("NS training builds discipline.", "en")
         text, lang = transcribe(str(fake_audio))
@@ -270,7 +270,7 @@ def test_transcribe_detects_chinese(tmp_path):
     fake_audio = tmp_path / "audio.mp3"
     fake_audio.write_bytes(b"fake audio")
 
-    with patch("autoso.transcription.transcriber.whisper.load_model") as mock_load, \
+    with patch("autoso.transcription.transcriber._get_model") as mock_load, \
          patch("autoso.transcription.transcriber._split_audio_if_needed", return_value=[str(fake_audio)]):
         mock_load.return_value = _make_model_mock("军事训练很重要", "zh")
         text, lang = transcribe(str(fake_audio))
@@ -286,7 +286,7 @@ def test_transcribe_joins_chunks():
         idx = chunks.index(path)
         return {"text": f"Chunk {idx + 1} text.", "language": "en"}
 
-    with patch("autoso.transcription.transcriber.whisper.load_model") as mock_load, \
+    with patch("autoso.transcription.transcriber._get_model") as mock_load, \
          patch("autoso.transcription.transcriber._split_audio_if_needed", return_value=chunks):
         mock_model = MagicMock()
         mock_model.transcribe.side_effect = side_effect
@@ -302,7 +302,7 @@ def test_transcribe_passes_language_when_provided(tmp_path):
     fake_audio = tmp_path / "audio.mp3"
     fake_audio.write_bytes(b"x")
 
-    with patch("autoso.transcription.transcriber.whisper.load_model") as mock_load, \
+    with patch("autoso.transcription.transcriber._get_model") as mock_load, \
          patch("autoso.transcription.transcriber._split_audio_if_needed", return_value=[str(fake_audio)]):
         model_mock = _make_model_mock("text")
         mock_load.return_value = model_mock
@@ -344,6 +344,17 @@ import whisper
 # Split anything over 20 MB to be safe
 _CHUNK_SIZE_BYTES = 20 * 1024 * 1024  # 20 MB
 
+# Cache the Whisper model — loading from disk + GPU init is expensive (~2-5s).
+# The module is only used from the thread-pool executor so the first call
+# pays the cost; subsequent calls reuse the cached model.
+_model_cache: dict = {}
+
+
+def _get_model(model_name: str = "base"):
+    if model_name not in _model_cache:
+        _model_cache[model_name] = whisper.load_model(model_name)
+    return _model_cache[model_name]
+
 
 def transcribe(
     audio_path: str, language: Optional[str] = None
@@ -354,7 +365,7 @@ def transcribe(
     Returns (transcript_text, detected_language_code).
     Language is from the first chunk (Whisper detects on the first 30 s).
     """
-    model = whisper.load_model("base")
+    model = _get_model("base")
     chunks = _split_audio_if_needed(audio_path)
 
     parts = []
@@ -830,30 +841,61 @@ async def transcribe_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
 
     url = args[0]
+    if not _is_valid_url(url):
+        await update.message.reply_text(
+            f"Invalid URL: {url!r}\nUsage: /transcribe <url> [optional title]"
+        )
+        return
+
     provided_title = " ".join(args[1:]) if len(args) > 1 else None
 
     await update.message.reply_text("Transcribing... this may take a few minutes.")
 
     try:
+        # transcribe_url is synchronous and CPU-heavy (Whisper inference +
+        # yt-dlp subprocess). Dispatch to the thread-pool executor — same
+        # pattern as _handle_analysis — so the event loop stays responsive.
         from autoso.transcription.transcription import transcribe_url
         import os
 
-        result = transcribe_url(url=url, title=provided_title)
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(
+            _pipeline_executor,
+            functools.partial(transcribe_url, url=url, title=provided_title),
+        )
 
-        with open(result.docx_path, "rb") as f:
-            await update.message.reply_document(
-                document=f,
-                filename=f"{result.title}.docx",
-                caption=f"Transcript: {result.title}",
-            )
-
-        os.unlink(result.docx_path)
+        try:
+            with open(result.docx_path, "rb") as f:
+                await update.message.reply_document(
+                    document=f,
+                    filename=f"{result.title}.docx",
+                    caption=f"Transcript: {result.title}",
+                )
+        finally:
+            # Always clean up the temp DOCX, even if reply_document fails
+            if os.path.exists(result.docx_path):
+                os.unlink(result.docx_path)
 
     except Exception:
         logger.exception("Transcription error for url=%s", url)
         await update.message.reply_text(
             "An error occurred during transcription. Check logs for details."
         )
+```
+
+- [ ] **Step 3b: Update `start_handler` in `autoso/bot/handlers.py` to mention `/transcribe`**
+
+Update the `start_handler` reply text to include the new command:
+
+```python
+@require_auth
+async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "AutoSO ready.\n\n"
+        "/texture <url> [title] — Texture analysis\n"
+        "/bucket <url> [title] — Bucket analysis\n"
+        "/transcribe <url> [title] — Transcribe audio/video"
+    )
 ```
 
 - [ ] **Step 4: Register handler in `autoso/bot/main.py`**

@@ -68,6 +68,7 @@ def test_configure_llm_uses_ollama_when_flag_set():
         from llama_index.llms.ollama import Ollama
         assert isinstance(llm, Ollama)
         assert Settings.llm is llm
+        assert Settings.embed_model is not None
 
 
 def test_configure_llm_uses_anthropic_when_flag_unset():
@@ -79,6 +80,16 @@ def test_configure_llm_uses_anthropic_when_flag_unset():
         from llama_index.llms.anthropic import Anthropic
         assert isinstance(llm, Anthropic)
         assert Settings.llm is llm
+        assert Settings.embed_model is not None
+
+
+def test_configure_llm_sets_huggingface_embeddings():
+    with patch("autoso.config.USE_OLLAMA", True), \
+         patch("autoso.config.OLLAMA_MODEL", "llama3.2"):
+        from autoso.pipeline.llm import configure_llm
+        configure_llm()
+        from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+        assert isinstance(Settings.embed_model, HuggingFaceEmbedding)
 ```
 
 - [ ] **Step 3: Run test to verify it fails**
@@ -94,19 +105,48 @@ Expected: `ImportError` — `autoso.pipeline.llm` not found.
 ```python
 # autoso/pipeline/llm.py
 from llama_index.core import Settings
+from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 import autoso.config as config
 
 
-def configure_llm():
-    if config.USE_OLLAMA:
-        from llama_index.llms.ollama import Ollama
-        llm = Ollama(model=config.OLLAMA_MODEL, request_timeout=300.0)
-    else:
-        from llama_index.llms.anthropic import Anthropic
-        llm = Anthropic(model=config.CLAUDE_MODEL, api_key=config.ANTHROPIC_API_KEY)
+import threading
 
-    Settings.llm = llm
-    return llm
+_configure_lock = threading.Lock()
+_configured = False
+
+
+def configure_llm():
+    """Configure both the LLM and the embedding model. Thread-safe, runs once.
+
+    LlamaIndex requires an embedding model for ChromaDB indexing/retrieval.
+    Without explicit configuration it falls back to OpenAI embeddings,
+    which would require an OpenAI API key we don't have. We use
+    HuggingFace's BAAI/bge-small-en-v1.5 — small, fast, free, local.
+
+    Thread safety: `run_pipeline` runs in a ThreadPoolExecutor with
+    max_workers=3. Settings.llm is a global singleton — concurrent calls
+    to configure_llm() must not race. The lock + flag ensures the LLM and
+    embedding model are set exactly once.
+    """
+    global _configured
+    if _configured:
+        return Settings.llm
+
+    with _configure_lock:
+        if _configured:
+            return Settings.llm
+
+        if config.USE_OLLAMA:
+            from llama_index.llms.ollama import Ollama
+            llm = Ollama(model=config.OLLAMA_MODEL, request_timeout=300.0)
+        else:
+            from llama_index.llms.anthropic import Anthropic
+            llm = Anthropic(model=config.CLAUDE_MODEL, api_key=config.ANTHROPIC_API_KEY)
+
+        Settings.llm = llm
+        Settings.embed_model = HuggingFaceEmbedding(model_name="BAAI/bge-small-en-v1.5")
+        _configured = True
+        return llm
 ```
 
 - [ ] **Step 5: Run test to verify it passes**
@@ -840,14 +880,44 @@ class CitationNode:
 
 
 def build_citation_engine(
-    index: VectorStoreIndex, similarity_top_k: int = 10
+    index: VectorStoreIndex,
+    similarity_top_k: int = 10,
+    system_prompt: str | None = None,
 ) -> CitationQueryEngine:
-    """Build a CitationQueryEngine that annotates its response with [N] markers."""
-    return CitationQueryEngine.from_args(
-        index,
-        similarity_top_k=similarity_top_k,
-        citation_chunk_size=512,
-    )
+    """Build a CitationQueryEngine that annotates its response with [N] markers.
+
+    The system_prompt is passed to the underlying query engine so the LLM
+    receives it as a system message, not mixed into the user query. This is
+    critical for consistent output formatting — stuffing the system prompt
+    into the query string causes the LLM to treat instructions as context
+    rather than behavioural directives.
+    """
+    kwargs: dict = {
+        "similarity_top_k": similarity_top_k,
+        "citation_chunk_size": 512,
+    }
+    if system_prompt:
+        from llama_index.core import PromptTemplate
+        # NOTE: Do NOT use <<SYS>> / <</SYS>> delimiters — those are Llama-2
+        # conventions that Claude and other models ignore. Instead, place the
+        # system prompt as clear instructions at the top of the QA template.
+        # LlamaIndex's Anthropic integration will send this via the system
+        # message when using ChatPromptTemplate, but CitationQueryEngine uses
+        # text_qa_template which is a single-string PromptTemplate. The
+        # "INSTRUCTIONS" header makes the role unambiguous to Claude.
+        qa_template = PromptTemplate(
+            "INSTRUCTIONS:\n" + system_prompt + "\n\n"
+            "Context information is below.\n"
+            "---------------------\n"
+            "{context_str}\n"
+            "---------------------\n"
+            "Given the context information and not prior knowledge, "
+            "answer the query.\n"
+            "Query: {query_str}\n"
+            "Answer: "
+        )
+        kwargs["text_qa_template"] = qa_template
+    return CitationQueryEngine.from_args(index, **kwargs)
 
 
 def extract_citations(response) -> List[CitationNode]:
@@ -1314,14 +1384,20 @@ def run_pipeline(
     post = scraper.scrape(url)
     logger.info("Scraped %d comments from %s", len(post.comments), post.platform)
 
+    if not post.comments:
+        raise RuntimeError(
+            f"No comments retrieved from {url}. "
+            f"The scraper returned 0 comments — check session cookies, "
+            f"proxy, or whether the post has comments."
+        )
+
     # 2. Title
     title = provided_title or infer_title(post)
 
     # 3. Index comments (ephemeral)
     comment_index = index_comments(post.comments)
-    comment_engine = build_citation_engine(comment_index)
 
-    # 4. Build prompt
+    # 4. Build prompt + engine with system prompt
     comments_text = "\n".join(
         f"Comment {c.position}: {c.text}" for c in post.comments
     )
@@ -1347,6 +1423,12 @@ def run_pipeline(
             f"BUCKET HOLY GRAIL REFERENCE:\n{hg_response}\n\n"
             f"{format_instr}"
         )
+
+    # Build engine with the system prompt so the LLM receives it as a
+    # system-level directive, not mixed into the user query.
+    comment_engine = build_citation_engine(
+        comment_index, system_prompt=system
+    )
 
     # 5. Query with citations
     response = comment_engine.query(full_query)
