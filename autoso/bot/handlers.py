@@ -10,6 +10,7 @@ from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 
 from autoso.bot.auth import require_auth
+from autoso.pipeline.pipeline import run_pipeline
 
 logger = logging.getLogger(__name__)
 
@@ -66,8 +67,6 @@ async def _handle_analysis(
     await update.message.reply_text("Processing... this may take a minute.")
 
     try:
-        from autoso.pipeline.pipeline import run_pipeline
-
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(
             _pipeline_executor,
