@@ -2,6 +2,7 @@
 import asyncio
 import functools
 import logging
+import os
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse
 
@@ -11,6 +12,7 @@ from telegram.ext import ContextTypes
 
 from autoso.bot.auth import require_auth
 from autoso.pipeline.pipeline import run_pipeline
+from autoso.transcription.transcription import transcribe_url
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +35,8 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "AutoSO ready.\n\n"
         "/texture <url> [title] — Texture analysis\n"
-        "/bucket <url> [title] — Bucket analysis"
+        "/bucket <url> [title] — Bucket analysis\n"
+        "/transcribe <url> [title] — Transcribe audio/video"
     )
 
 
@@ -106,4 +109,43 @@ async def _handle_analysis(
         logger.exception("Pipeline error for url=%s mode=%s", url, mode)
         await update.message.reply_text(
             "An error occurred while processing your request. Check logs for details."
+        )
+
+
+@require_auth
+async def transcribe_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    args = context.args
+    if not args:
+        await update.message.reply_text("Usage: /transcribe <url> [optional title]")
+        return
+
+    url = args[0]
+    if not _is_valid_url(url):
+        await update.message.reply_text(
+            f"Invalid URL: {url!r}\nUsage: /transcribe <url> [optional title]"
+        )
+        return
+
+    provided_title = " ".join(args[1:]) if len(args) > 1 else None
+
+    await update.message.reply_text("Transcribing... this may take a few minutes.")
+
+    try:
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(
+            _pipeline_executor,
+            functools.partial(transcribe_url, url=url, title=provided_title),
+        )
+        docx_path = result.docx_path
+        filename = os.path.basename(docx_path)
+        with open(docx_path, "rb") as f:
+            await update.message.reply_document(document=f, filename=filename)
+        try:
+            os.unlink(docx_path)
+        except OSError:
+            pass
+    except Exception:
+        logger.exception("Transcription error for url=%s", url)
+        await update.message.reply_text(
+            "An error occurred during transcription. Check logs for details."
         )

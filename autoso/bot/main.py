@@ -2,7 +2,7 @@
 import logging
 from telegram.ext import Application, CommandHandler
 from autoso.config import TELEGRAM_TOKEN
-from autoso.bot.handlers import start_handler, texture_handler, bucket_handler
+from autoso.bot.handlers import start_handler, texture_handler, bucket_handler, transcribe_handler
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -15,6 +15,7 @@ def main():
     app.add_handler(CommandHandler("start", start_handler))
     app.add_handler(CommandHandler("texture", texture_handler))
     app.add_handler(CommandHandler("bucket", bucket_handler))
+    app.add_handler(CommandHandler("transcribe", transcribe_handler))
     app.run_polling()
 
 
