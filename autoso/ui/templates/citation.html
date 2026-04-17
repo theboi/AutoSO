@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ analysis.title }} — AutoSO</title>
+  <link rel="stylesheet" href="/static/citation.css" />
+</head>
+<body>
+  <header class="header">
+    <h1>{{ analysis.title }}</h1>
+    <span class="mode-badge mode-{{ analysis.mode }}">{{ analysis.mode | upper }}</span>
+    <a class="source-link" href="{{ analysis.url }}" target="_blank" rel="noopener">View Source</a>
+  </header>
+
+  <main class="panels">
+    <section class="panel panel-output" id="panel-output">
+      <h2 class="panel-heading">Analysis</h2>
+      <div class="output-text" id="output-text">
+        {{ analysis.output_cited | render_citations | safe }}
+      </div>
+    </section>
+
+    <section class="panel panel-sources" id="panel-sources">
+      <h2 class="panel-heading">Sources</h2>
+      {% if citations %}
+        {% for c in citations %}
+        <article class="citation-card" id="citation-{{ c.citation_number }}">
+          <header class="citation-card-header">
+            <span class="citation-number">[{{ c.citation_number }}]</span>
+            <span class="platform-badge platform-{{ c.platform }}">{{ c.platform }}</span>
+            <span class="position-label">Comment #{{ c.position }}</span>
+          </header>
+          <p class="citation-text">{{ c.text }}</p>
+        </article>
+        {% endfor %}
+      {% else %}
+        <p class="no-citations">No citations available for this analysis.</p>
+      {% endif %}
+    </section>
+  </main>
+
+  <script src="/static/citation.js"></script>
+</body>
+</html>
