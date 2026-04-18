@@ -94,13 +94,13 @@ Run the migrations in order in the Supabase SQL Editor:
 
 ### 5. (Optional) Ingest the Bucket Holy Grail
 
-The `/bucket` command uses a reference document to classify comments. To load it:
+The `/bucket` command uses reference documents to classify comments. Place your documents in `data/holy_grail/` and run:
 
 ```bash
-python scripts/ingest_holy_grail.py path/to/holy_grail.pdf
+python scripts/ingest_holy_grail.py data/holy_grail/
 ```
 
-This only needs to be run once; it persists in ChromaDB at `CHROMADB_PATH`.
+This accepts a file or directory (recursive). Re-running clears and rebuilds the index. It persists in ChromaDB at `CHROMADB_PATH`.
 
 ---
 

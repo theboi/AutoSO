@@ -1,8 +1,15 @@
 # autoso/pipeline/holy_grail.py
+import logging
+from pathlib import Path
 import chromadb
-from llama_index.core import VectorStoreIndex, SimpleDirectoryReader, StorageContext
+from llama_index.core import VectorStoreIndex, SimpleDirectoryReader, StorageContext, Settings
+from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.vector_stores.chroma import ChromaVectorStore
 import autoso.config as config
+
+Settings.embed_model = HuggingFaceEmbedding(model_name="BAAI/bge-small-en-v1.5")
+
+logger = logging.getLogger(__name__)
 
 _COLLECTION_NAME = "bucket_holy_grail"
 
@@ -11,19 +18,23 @@ def _get_client() -> chromadb.PersistentClient:
     return chromadb.PersistentClient(path=config.CHROMADB_PATH)
 
 
-def ingest_holy_grail(file_path: str) -> VectorStoreIndex:
-    """Ingest a document into the persistent Holy Grail index. Replaces existing."""
+def ingest_holy_grail(path: str) -> VectorStoreIndex:
+    """Ingest a file or directory into the persistent Holy Grail index. Replaces existing."""
     client = _get_client()
     try:
         client.delete_collection(_COLLECTION_NAME)
     except Exception:
-        pass
+        logger.debug("No existing collection to delete; creating fresh.")
 
     collection = client.create_collection(_COLLECTION_NAME)
     vector_store = ChromaVectorStore(chroma_collection=collection)
     storage_context = StorageContext.from_defaults(vector_store=vector_store)
 
-    docs = SimpleDirectoryReader(input_files=[file_path]).load_data()
+    p = Path(path)
+    if p.is_dir():
+        docs = SimpleDirectoryReader(input_dir=str(p), recursive=True).load_data()
+    else:
+        docs = SimpleDirectoryReader(input_files=[str(p)]).load_data()
     return VectorStoreIndex.from_documents(
         docs, storage_context=storage_context, show_progress=False
     )

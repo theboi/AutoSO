@@ -18,6 +18,23 @@ logger = logging.getLogger(__name__)
 
 TELEGRAM_MAX_LENGTH = 4096
 
+
+def _split_message(text: str, limit: int = TELEGRAM_MAX_LENGTH) -> list[str]:
+    if len(text) <= limit:
+        return [text]
+    chunks = []
+    while text:
+        if len(text) <= limit:
+            chunks.append(text)
+            break
+        split_at = text.rfind("\n", 0, limit)
+        if split_at == -1:
+            split_at = limit
+        chunks.append(text[:split_at])
+        text = text[split_at:].lstrip("\n")
+    return chunks
+
+
 # Shared executor — pipeline runs (scrape + LLM) are CPU/IO-heavy synchronous work.
 _pipeline_executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="pipeline")
 
@@ -77,33 +94,13 @@ async def _handle_analysis(
         )
         output = result.output
 
-        if len(output) > TELEGRAM_MAX_LENGTH:
-            from autoso.config import CITATION_UI_BASE_URL
-
-            logger.error(
-                "Output exceeds Telegram limit: %d chars, run_id=%s",
-                len(output),
-                result.run_id,
-            )
-            truncated = output[: TELEGRAM_MAX_LENGTH - 200] + "\n\n[...truncated]"
-            ui_msg = ""
-            if CITATION_UI_BASE_URL:
-                ui_msg = f"\nFull output with citations: {CITATION_UI_BASE_URL}/{result.run_id}"
-
-            await update.message.reply_text(
-                f"Output is {len(output)} chars (Telegram limit is {TELEGRAM_MAX_LENGTH}).{ui_msg}"
-            )
+        chunks = _split_message(output)
+        for chunk in chunks:
             try:
-                await update.message.reply_text(truncated, parse_mode="Markdown")
+                await update.message.reply_text(chunk, parse_mode="Markdown")
             except BadRequest:
-                await update.message.reply_text(truncated)
-            return
-
-        try:
-            await update.message.reply_text(output, parse_mode="Markdown")
-        except BadRequest:
-            logger.warning("Markdown parse failed for run_id=%s — sending plain text", result.run_id)
-            await update.message.reply_text(output)
+                logger.warning("Markdown parse failed for run_id=%s — sending plain text", result.run_id)
+                await update.message.reply_text(chunk)
 
     except Exception:
         logger.exception("Pipeline error for url=%s mode=%s", url, mode)
