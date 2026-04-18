@@ -143,9 +143,37 @@ OLLAMA_MODEL=llama3.2
 
 ## Running tests
 
+Unit tests (fast, no external calls):
+
 ```bash
 pytest
 ```
+
+### Integration tests
+
+Integration tests hit real external services (Reddit, Instagram, Facebook, Anthropic, Telegram). They are skipped by default; opt in with `--run-integration`.
+
+```bash
+pytest tests/integration/ --run-integration -v
+```
+
+Each test also auto-skips if its required credentials are not real (i.e. still set to the test placeholders). To actually run them:
+
+1. Fill in real values in `.env` for whichever services you want to test (`TELEGRAM_TOKEN`, `ANTHROPIC_API_KEY`, `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`).
+2. Fill in real URLs in [tests/integration/data.py](tests/integration/data.py) for `REDDIT_URL`, `INSTAGRAM_URL`, `FACEBOOK_URL`.
+3. For Instagram/Facebook, save Playwright session cookies to `data/sessions/{instagram,facebook}_session.json` (log in interactively once).
+
+### Standalone diagnostic CLIs
+
+The same checks are exposed as runnable modules — useful for quickly verifying a single integration without pytest:
+
+```bash
+python -m autoso.diagnostics.scrape --url <post-url>      # auto-detects platform
+python -m autoso.diagnostics.analyze --mode texture       # or --mode bucket
+python -m autoso.diagnostics.telegram                     # Telegram getMe() liveness check
+```
+
+Each prints a JSON result and exits non-zero on failure.
 
 ---
 
@@ -154,6 +182,7 @@ pytest
 ```
 autoso/
 ├── bot/              # Telegram handlers, auth, entry point
+├── diagnostics/      # Live-integration verifiers (scrape, analyze, telegram)
 ├── pipeline/         # RAG pipeline: indexing, citations, prompts, LLM config
 ├── scraping/         # Reddit (PRAW), Instagram & Facebook (Playwright)
 ├── storage/          # Supabase integration
@@ -163,5 +192,7 @@ autoso/
 migrations/           # SQL schema files (run in Supabase)
 scripts/              # Utility scripts (holy grail ingestion)
 data/                 # Runtime data: ChromaDB, session files
-tests/                # Full test suite (mirrors autoso/ structure)
+tests/
+├── integration/      # Opt-in tests against real services (--run-integration)
+└── ...               # Unit tests (mirror autoso/ structure)
 ```
