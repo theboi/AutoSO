@@ -15,7 +15,7 @@ def run(url: str, platform: str) -> dict:
     """Scrape url and return a result dict.
 
     Returns:
-        {"ok": True, "platform": ..., "url": ..., "comment_count": N, "title": ...}
+        {"ok": True, "platform": ..., "url": ..., "comment_count": N, "title": ..., "comments": [...]}
         {"ok": False, "platform": ..., "url": ..., "error": "..."}
     """
     from autoso.scraping.base import get_scraper
@@ -33,7 +33,7 @@ def run(url: str, platform: str) -> dict:
         "url": url,
         "comment_count": len(post.comments),
         "title": post.title,
-        "first_20_comments": [c.text for c in post.comments[:20]],
+        "comments": [c.text for c in post.comments],
         **({"error": "zero comments returned"} if not ok else {}),
     }
 
