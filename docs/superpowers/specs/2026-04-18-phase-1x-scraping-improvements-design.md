@@ -27,7 +27,7 @@ class Comment:
     author: str | None               # None if unextractable
     date: datetime | None            # None if unextractable
     text: str
-    likes: int                       # 0 if unextractable
+    likes: int | None                # None if unextractable
     position: int                    # 0-indexed, top-level ordering only
     subcomments: list[Comment] = field(default_factory=list)
 
@@ -41,7 +41,7 @@ class Post:
     date: datetime | None
     author: str | None
     content: str | None
-    likes: int                       # 0 if unextractable
+    likes: int | None                # None if unextractable
     comments: list[Comment] = field(default_factory=list)
 ```
 
@@ -131,7 +131,7 @@ Update `_extract_comments()` in both scrapers to populate the new `Comment` fiel
 
 - `author` — extract from `aria-label="Comment by <name>"` (FB) or username span (IG)
 - `date` — extract from `<abbr>` or `<time>` elements; parse to `datetime`; `None` on failure
-- `likes` — extract reaction count element; `0` on failure
+- `likes` — extract reaction count element; `None` on failure
 - `subcomments` — Facebook already expands reply threads during `_expand_comments()`; after extraction, detect reply articles nested inside parent articles and attach as `subcomments` rather than flat comments. Instagram replies are not easily distinguishable from top-level — `subcomments` stays empty.
 
 All fields are best-effort: `None` / `0` / `""` on extraction failure, never raises.
