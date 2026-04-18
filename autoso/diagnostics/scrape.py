@@ -33,6 +33,7 @@ def run(url: str, platform: str) -> dict:
         "url": url,
         "comment_count": len(post.comments),
         "title": post.title,
+        "first_20_comments": [c.text for c in post.comments[:20]],
         **({"error": "zero comments returned"} if not ok else {}),
     }
 
