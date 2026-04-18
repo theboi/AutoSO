@@ -27,7 +27,14 @@ def _use_real_env(monkeypatch):
             continue
         for key, val in DOTENV.items():
             if is_real_credential(val) and hasattr(mod, key):
-                monkeypatch.setattr(mod, key, val)
+                # Preserve the attribute's original type so bool attrs stay bool
+                # (e.g. USE_OLLAMA="false" must not become truthy string "false").
+                existing = getattr(mod, key)
+                if isinstance(existing, bool):
+                    typed_val = val.lower() in ("true", "1", "yes")
+                else:
+                    typed_val = val
+                monkeypatch.setattr(mod, key, typed_val)
 
     # 3. Reset autoso.pipeline.llm singleton. The next configure_llm() call will
     #    reassign Settings.llm with the real ANTHROPIC_API_KEY.
