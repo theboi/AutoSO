@@ -19,8 +19,10 @@ from autoso.pipeline.prompts import (
 )
 
 _APPEND_INSTRUCTION = (
-    "After each bullet, append the citation markers [N] for the comments that support it. "
-    "Use the bracketed numbers shown in the COMMENTS block above."
+    "After each bullet point or numbered item, append the citation markers [N] for the "
+    "comments that support it. ALWAYS use square brackets, e.g. [65] [105] [132]. "
+    "NEVER write bare numbers without brackets. Use the bracketed numbers shown in the "
+    "COMMENTS block above."
 )
 
 _MARKER_RE = re.compile(r"\[(\d+)\]")

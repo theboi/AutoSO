@@ -40,5 +40,7 @@ def build_citation_engine(
 
 
 def strip_citation_markers(text: str) -> str:
-    """Remove all [N] citation markers from text."""
-    return re.sub(r"\s*\[\d+\]", "", text).strip()
+    """Remove all [N] citation markers and bare trailing number lists from text."""
+    text = re.sub(r"\s*\[\d+\]", "", text)
+    text = re.sub(r"(\s+\d+(?:,\s*\d+)+)\s*$", "", text, flags=re.MULTILINE)
+    return text.strip()
