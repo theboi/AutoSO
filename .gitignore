@@ -29,3 +29,9 @@ Thumbs.db
 
 # Git worktrees
 .worktrees/
+
+# Claude Code settings
+.claude/
+
+# Investigation scratch files
+investigation_results/
