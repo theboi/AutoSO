@@ -22,3 +22,7 @@ CLAUDE_MODEL: str = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6")
 
 PROXY_URL: str | None = os.environ.get("PROXY_URL") or None
 CITATION_UI_BASE_URL: str = os.environ.get("CITATION_UI_BASE_URL", "http://localhost:8000")
+
+# YouTube: Netscape-format cookies.txt exported from your browser.
+# Required on cloud/datacenter IPs where yt-dlp triggers YouTube's bot check.
+YOUTUBE_COOKIES_FILE: str = os.environ.get("YOUTUBE_COOKIES_FILE", "")

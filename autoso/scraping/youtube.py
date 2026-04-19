@@ -11,28 +11,43 @@ from autoso.scraping.models import Comment, Post, ScrapeError
 _YT_DLP_TIMEOUT = 300
 
 
+def _build_yt_dlp_cmd(url: str, output_template: str) -> list[str]:
+    from autoso.config import YOUTUBE_COOKIES_FILE
+
+    cmd = [
+        "yt-dlp",
+        "--skip-download",
+        "--write-info-json",
+        "--write-comments",
+        "--no-warnings",
+        "-o",
+        output_template,
+    ]
+    if YOUTUBE_COOKIES_FILE and Path(YOUTUBE_COOKIES_FILE).exists():
+        cmd += ["--cookies", YOUTUBE_COOKIES_FILE]
+    cmd.append(url)
+    return cmd
+
+
 class YouTubeScraper:
     def scrape(self, url: str) -> Post:
         output_dir = tempfile.mkdtemp()
         output_template = str(Path(output_dir) / "%(id)s")
 
         result = subprocess.run(
-            [
-                "yt-dlp",
-                "--skip-download",
-                "--write-info-json",
-                "--write-comments",
-                "--no-warnings",
-                "-o",
-                output_template,
-                url,
-            ],
+            _build_yt_dlp_cmd(url, output_template),
             capture_output=True,
             text=True,
             timeout=_YT_DLP_TIMEOUT,
         )
         if result.returncode != 0:
-            raise ScrapeError(f"yt-dlp failed: {result.stderr.strip()}", cause="unknown")
+            stderr = result.stderr.strip()
+            cause = "auth_wall" if "Sign in" in stderr or "bot" in stderr.lower() else "unknown"
+            raise ScrapeError(
+                f"yt-dlp failed: {stderr}\n"
+                "Tip: export YouTube cookies and set YOUTUBE_COOKIES_FILE=/path/to/cookies.txt in .env",
+                cause=cause,
+            )
 
         info_files = list(Path(output_dir).glob("*.info.json"))
         if not info_files:

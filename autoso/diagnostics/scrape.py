@@ -18,10 +18,14 @@ def run(url: str, platform: str) -> dict:
         {"ok": True, "platform": ..., "url": ..., "comment_count": N, "title": ..., "comments": [...]}
         {"ok": False, "platform": ..., "url": ..., "error": "..."}
     """
+    from autoso.scraping.base import get_scraper
     from autoso.scraping import flatten_comments, scrape
+    from autoso.storage.supabase import store_scrape
 
     try:
-        scrape_id, post = scrape(url)
+        scraper = get_scraper(url)
+        post = scraper.scrape(url)
+        scrape_id = store_scrape(url, post)
     except Exception as exc:
         return {"ok": False, "platform": platform, "url": url, "error": str(exc)}
 

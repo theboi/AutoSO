@@ -1,114 +1,221 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Any
+import asyncio
+import re
+from datetime import datetime
+from typing import List
 
-import httpx
+from playwright.async_api import async_playwright
+from playwright_stealth import Stealth
 
 from autoso.scraping.models import Comment, Post, ScrapeError
+from autoso.scraping.playwright_base import PlaywrightScraper
 
 
-_USER_AGENT = "AutoSO/1.0 (scraping)"
-_TIMEOUT = 20.0
+async def stealth_async(page):
+    stealth = Stealth()
+    await stealth.apply_stealth_async(page)
 
 
-class RedditScraper:
+class RedditScraper(PlaywrightScraper):
+    def __init__(self):
+        super().__init__("reddit")
+
     def scrape(self, url: str) -> Post:
-        json_url = url.rstrip("/") + ".json"
-        try:
-            resp = httpx.get(
-                json_url,
-                headers={"User-Agent": _USER_AGENT},
-                follow_redirects=True,
-                timeout=_TIMEOUT,
+        return asyncio.run(self._scrape_async(url))
+
+    async def _scrape_async(self, url: str) -> Post:
+        old_url = _to_old_reddit(url)
+
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(**self._launch_kwargs())
+            context = await self._get_context(browser)
+            page = await context.new_page()
+            await stealth_async(page)
+
+            try:
+                resp = await page.goto(old_url, wait_until="domcontentloaded", timeout=30_000)
+            except Exception as exc:
+                raise ScrapeError(f"Page load failed: {exc}", cause="timeout")
+
+            if resp and resp.status == 403:
+                raise ScrapeError(
+                    "Reddit blocked this request (403). "
+                    "Set PROXY_URL to a residential/ISP proxy in .env to bypass this.",
+                    cause="auth_wall",
+                )
+
+            await self._human_delay(800, 1500)
+
+            title_el = page.locator("#siteTable .link .title a.title, h1").first
+            post_title = ""
+            try:
+                post_title = (await title_el.inner_text(timeout=5000)).strip()
+            except Exception:
+                pass
+
+            subreddit = ""
+            try:
+                sub_el = page.locator(".sidecontentbox a[href*='/r/'], .redditname a").first
+                if await sub_el.is_visible(timeout=2000):
+                    subreddit = (await sub_el.inner_text()).strip()
+            except Exception:
+                pass
+            if not subreddit:
+                m = re.search(r"reddit\.com(/r/[^/]+)", old_url)
+                subreddit = m.group(1) if m else "reddit"
+
+            post_author = None
+            try:
+                author_el = page.locator(".tagline .author").first
+                if await author_el.is_visible(timeout=2000):
+                    post_author = (await author_el.inner_text()).strip() or None
+            except Exception:
+                pass
+
+            post_date = None
+            try:
+                time_el = page.locator(".tagline time").first
+                if await time_el.is_visible(timeout=2000):
+                    ts = await time_el.get_attribute("datetime")
+                    if ts:
+                        post_date = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            except Exception:
+                pass
+
+            post_score = None
+            try:
+                score_el = page.locator(".score.unvoted").first
+                if await score_el.is_visible(timeout=2000):
+                    txt = (await score_el.inner_text()).replace(",", "").strip()
+                    post_score = int(txt) if txt.lstrip("-").isdigit() else None
+            except Exception:
+                pass
+
+            post_content = ""
+            try:
+                body_el = page.locator(".expando .usertext-body .md").first
+                if await body_el.is_visible(timeout=2000):
+                    post_content = (await body_el.inner_text()).strip()
+            except Exception:
+                pass
+            if not post_content:
+                post_content = post_title
+
+            await self._expand_comments(page)
+            comments = await self._extract_comments(page)
+
+            await self._save_session(context)
+            await browser.close()
+
+            return Post(
+                id=_derive_id(url),
+                platform="reddit",
+                url=url,
+                page_title=subreddit,
+                post_title=post_title,
+                date=post_date,
+                author=post_author,
+                content=post_content,
+                likes=post_score,
+                comments=comments,
             )
-            resp.raise_for_status()
-            payload = resp.json()
-        except httpx.TimeoutException as exc:
-            raise ScrapeError(f"Reddit JSON fetch timed out: {exc}", cause="timeout")
-        except httpx.HTTPStatusError as exc:
-            cause = "rate_limit" if exc.response.status_code == 429 else "unknown"
-            raise ScrapeError(f"Reddit JSON HTTP error: {exc}", cause=cause)
-        except Exception as exc:
-            raise ScrapeError(f"Reddit JSON fetch failed: {exc}", cause="unknown")
 
-        if not isinstance(payload, list) or len(payload) < 2:
-            raise ScrapeError("Unexpected Reddit JSON shape", cause="selector_drift")
+    async def _expand_comments(self, page) -> None:
+        for _ in range(20):
+            try:
+                more = page.locator("span.morecomments a").first
+                if await more.is_visible(timeout=1000):
+                    await more.click()
+                    await self._human_delay(800, 1500)
+                else:
+                    break
+            except Exception:
+                break
 
-        post_listing, comment_listing = payload[0], payload[1]
-        post_children = post_listing.get("data", {}).get("children", [])
-        if not post_children:
-            raise ScrapeError("Reddit post listing empty", cause="selector_drift")
+    async def _extract_comments(self, page) -> List[Comment]:
+        top_level = page.locator(".commentarea > .sitetable > .thing.comment")
+        count = await top_level.count()
+        result: List[Comment] = []
+        for i in range(count):
+            comment = await self._build_comment(top_level.nth(i), i)
+            if comment:
+                result.append(comment)
+        return result
 
-        post_data = post_children[0].get("data", {})
-        comment_children = comment_listing.get("data", {}).get("children", [])
+    async def _build_comment(self, el, position: int) -> Comment | None:
+        try:
+            if "deleted" in (await el.get_attribute("class") or ""):
+                return None
 
-        comments = _build_comments(comment_children)
+            author = None
+            try:
+                a_el = el.locator(".entry .author").first
+                if await a_el.is_visible(timeout=500):
+                    author = (await a_el.inner_text()).strip() or None
+            except Exception:
+                pass
 
-        return Post(
-            id=post_data.get("id", ""),
-            platform="reddit",
-            url=url,
-            page_title=post_data.get("subreddit_name_prefixed", "") or "reddit",
-            post_title=post_data.get("title", ""),
-            date=_epoch_to_datetime(post_data.get("created_utc")),
-            author=post_data.get("author"),
-            content=post_data.get("selftext") or post_data.get("title", ""),
-            likes=post_data.get("score"),
-            comments=comments,
-        )
+            text = ""
+            try:
+                body = el.locator(".entry .usertext-body .md").first
+                text = (await body.inner_text(timeout=2000)).strip()
+            except Exception:
+                pass
+
+            if not text or text in ("[deleted]", "[removed]"):
+                return None
+
+            date = None
+            try:
+                t = el.locator(".entry time").first
+                if await t.is_visible(timeout=500):
+                    ts = await t.get_attribute("datetime")
+                    if ts:
+                        date = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            except Exception:
+                pass
+
+            score = None
+            try:
+                s = el.locator(".entry .score.unvoted").first
+                if await s.is_visible(timeout=500):
+                    txt = (await s.inner_text()).replace(",", "").strip()
+                    score = int(txt) if txt.lstrip("-").isdigit() else None
+            except Exception:
+                pass
+
+            subcomments: List[Comment] = []
+            child_els = el.locator(".child .sitetable > .thing.comment")
+            child_count = await child_els.count()
+            for j in range(child_count):
+                sub = await self._build_comment(child_els.nth(j), j)
+                if sub:
+                    subcomments.append(sub)
+
+            return Comment(
+                id=f"rd_{position}",
+                platform="reddit",
+                author=author,
+                date=date,
+                text=text,
+                likes=score,
+                position=position,
+                subcomments=subcomments,
+            )
+        except Exception:
+            return None
 
 
-def _epoch_to_datetime(epoch: float | None) -> datetime | None:
-    if epoch is None:
-        return None
-    return datetime.fromtimestamp(epoch, tz=timezone.utc)
+def _to_old_reddit(url: str) -> str:
+    url = re.sub(r"https?://(www\.)?reddit\.com", "https://old.reddit.com", url)
+    if not url.rstrip("/").endswith("?limit=500"):
+        url = url.rstrip("/") + "?limit=500"
+    return url
 
 
-def _is_deleted(body: str | None, author: str | None) -> bool:
-    if body is None:
-        return True
-    stripped = body.strip()
-    return stripped in ("[deleted]", "[removed]")
-
-
-def _build_comments(children: list[dict[str, Any]]) -> list[Comment]:
-    comments: list[Comment] = []
-    position = 0
-    for child in children:
-        if child.get("kind") != "t1":
-            continue
-        data = child.get("data", {})
-        if _is_deleted(data.get("body"), data.get("author")):
-            continue
-        comment = _child_to_comment(data, position)
-        comments.append(comment)
-        position += 1
-    return comments
-
-
-def _child_to_comment(data: dict[str, Any], position: int) -> Comment:
-    subcomments: list[Comment] = []
-    replies = data.get("replies")
-    if isinstance(replies, dict):
-        reply_children = replies.get("data", {}).get("children", [])
-        sub_position = 0
-        for rc in reply_children:
-            if rc.get("kind") != "t1":
-                continue
-            rdata = rc.get("data", {})
-            if _is_deleted(rdata.get("body"), rdata.get("author")):
-                continue
-            subcomments.append(_child_to_comment(rdata, sub_position))
-            sub_position += 1
-
-    return Comment(
-        id=data.get("id", ""),
-        platform="reddit",
-        author=data.get("author"),
-        date=_epoch_to_datetime(data.get("created_utc")),
-        text=data.get("body", ""),
-        likes=data.get("score"),
-        position=position,
-        subcomments=subcomments,
-    )
+def _derive_id(url: str) -> str:
+    m = re.search(r"/comments/([a-z0-9]+)", url)
+    if m:
+        return f"rd_{m.group(1)}"
+    return f"rd_{abs(hash(url)) % 10_000_000_000}"

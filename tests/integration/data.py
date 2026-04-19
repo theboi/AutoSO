@@ -1,12 +1,28 @@
 # tests/integration/data.py
-# Default URLs for live scraping tests — fill these in before running.
-# Override at runtime by passing --url to the CLI, or by setting the variable
-# directly in your test invocation.
+# ─────────────────────────────────────────────────────────────────────────────
+# INPUT ALL TEST URLS HERE — one per platform.
+# Run a single platform:  python -m autoso.diagnostics.scrape --url <URL>
+# Run all platforms:      python tests/integration/run_all.py
+# ─────────────────────────────────────────────────────────────────────────────
 from autoso.scraping.models import Comment, Post
 
-REDDIT_URL: str = "https://www.reddit.com/r/Bolehland/comments/1sju0kx/malaysian_who_grew_up_in_singapore_as_pr_skipped/"      # e.g. https://www.reddit.com/r/singapore/comments/...
-INSTAGRAM_URL: str = ""   # e.g. https://www.instagram.com/p/...
-FACEBOOK_URL: str = "https://www.facebook.com/100064763316351/posts/1424578959710868/"    # e.g. https://www.facebook.com/mindef.sg/posts/...
+# Reddit — requires PROXY_URL (residential/ISP) or run from a non-datacenter IP
+REDDIT_URL: str = "https://www.reddit.com/r/Bolehland/comments/1sju0kx/malaysian_who_grew_up_in_singapore_as_pr_skipped/"
+
+# Instagram — requires data/sessions/instagram_session.json (run login helper)
+INSTAGRAM_URL: str = "https://www.instagram.com/p/DXEA8iQj5YY/"
+
+# Facebook — requires data/sessions/facebook_session.json (already configured)
+FACEBOOK_URL: str = "https://www.facebook.com/100064763316351/posts/1424578959710868/"
+
+# TikTok — session required; run: python scripts/save_session.py tiktok
+TIKTOK_URL: str = "https://www.tiktok.com/@mindefsg/video/7449298784200212486"
+
+# YouTube — no auth on residential IPs; on cloud IPs set YOUTUBE_COOKIES_FILE in .env
+YOUTUBE_URL: str = "https://www.youtube.com/watch?v=AXOhIZURyMY"
+
+# HardwareZone — no auth needed
+HARDWAREZONE_URL: str = "https://forums.hardwarezone.com.sg/threads/the-smart-home-tech-show-2026-x-hwz-giveaway-labour-day-special.7199663/"
 
 # Canned post used by analyze tests — no scraping needed.
 CANNED_POST = Post(

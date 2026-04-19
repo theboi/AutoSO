@@ -31,7 +31,8 @@ class HardwareZoneScraper(PlaywrightScraper):
             await stealth_async(page)
 
             try:
-                await page.goto(url, wait_until="networkidle", timeout=30_000)
+                await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+                await self._human_delay(1000, 2000)
             except Exception as exc:
                 raise ScrapeError(f"Page load failed: {exc}", cause="timeout")
 
@@ -57,7 +58,8 @@ class HardwareZoneScraper(PlaywrightScraper):
 
                 next_url = _resolve_url(url, href)
                 try:
-                    await page.goto(next_url, wait_until="networkidle", timeout=30_000)
+                    await page.goto(next_url, wait_until="domcontentloaded", timeout=30_000)
+                    await self._human_delay(500, 1000)
                 except Exception:
                     break
                 await self._human_delay(800, 1500)

@@ -43,11 +43,24 @@ class TikTokScraper(PlaywrightScraper):
             page.on("response", lambda r: asyncio.ensure_future(on_response(r)))
 
             try:
-                await page.goto(url, wait_until="networkidle", timeout=30_000)
+                await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
             except Exception as exc:
                 raise ScrapeError(f"Page load failed: {exc}", cause="timeout")
 
             await self._human_delay(1500, 2500)
+
+            content = await page.content()
+            if "captcha" in content.lower() or (
+                ("log in" in content.lower() or "sign up" in content.lower())
+                and "Make Your Day" in await page.title()
+            ):
+                raise ScrapeError(
+                    "TikTok login/CAPTCHA wall — session cookies expired. "
+                    "Delete data/sessions/tiktok_session.json, log in via a real browser, "
+                    "then export cookies using 'Get cookies.txt LOCALLY' extension.",
+                    cause="auth_wall",
+                )
+
             await self._scroll_comments(page)
             await self._human_delay(2000, 4000)
 
