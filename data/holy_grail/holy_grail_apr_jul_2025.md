@@ -1593,7 +1593,6 @@
 7.  SG/WoG-frivolous comments
 8.  MINDEF/SAF/NS-frivolous comments
 
-
 **Negative**
 1.  Opined that SG should defend Malaysia
 2.  Opined that NDP was for foreigners
