@@ -60,11 +60,6 @@ ANTHROPIC_API_KEY=your_anthropic_api_key_here
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_KEY=your_supabase_anon_key_here
 
-# Reddit (PRAW) — required for Reddit scraping
-REDDIT_CLIENT_ID=your_reddit_client_id
-REDDIT_CLIENT_SECRET=your_reddit_client_secret
-REDDIT_USER_AGENT=AutoSO/1.0 by u/your_username
-
 # Whitelist: comma-separated Telegram user IDs allowed to use the bot
 WHITELISTED_USER_IDS=123456789,987654321
 
@@ -159,7 +154,7 @@ pytest tests/integration/ --run-integration -v
 
 Each test also auto-skips if its required credentials are not real (i.e. still set to the test placeholders). To actually run them:
 
-1. Fill in real values in `.env` for whichever services you want to test (`TELEGRAM_TOKEN`, `ANTHROPIC_API_KEY`, `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`).
+1. Fill in real values in `.env` for whichever services you want to test (`TELEGRAM_TOKEN`, `ANTHROPIC_API_KEY`).
 2. Fill in real URLs in [tests/integration/data.py](tests/integration/data.py) for `REDDIT_URL`, `INSTAGRAM_URL`, `FACEBOOK_URL`.
 3. For Instagram/Facebook, save Playwright session cookies to `data/sessions/{instagram,facebook}_session.json` (log in interactively once).
 
@@ -184,7 +179,7 @@ autoso/
 ├── bot/              # Telegram handlers, auth, entry point
 ├── diagnostics/      # Live-integration verifiers (scrape, analyze, telegram)
 ├── pipeline/         # RAG pipeline: indexing, citations, prompts, LLM config
-├── scraping/         # Reddit (PRAW), Instagram & Facebook (Playwright)
+├── scraping/         # Reddit (JSON API), Instagram & Facebook (Playwright)
 ├── storage/          # Supabase integration
 ├── transcription/    # yt-dlp download, Whisper transcription, DOCX output
 └── ui/               # FastAPI citation viewer

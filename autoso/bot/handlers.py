@@ -10,6 +10,7 @@ from telegram import Update
 from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 
+import autoso.config as config
 from autoso.bot.auth import require_auth
 from autoso.pipeline.pipeline import run_pipeline
 from autoso.transcription.transcription import transcribe_url
@@ -93,6 +94,13 @@ async def _handle_analysis(
             functools.partial(run_pipeline, url=url, mode=mode, provided_title=provided_title),
         )
         output = result.output
+
+        if len(output) > TELEGRAM_MAX_LENGTH:
+            await update.message.reply_text(
+                "Output too long for one message "
+                f"({len(output)} chars). "
+                f"View full citations: {config.CITATION_UI_BASE_URL.rstrip('/')}/{result.run_id}"
+            )
 
         chunks = _split_message(output)
         for chunk in chunks:

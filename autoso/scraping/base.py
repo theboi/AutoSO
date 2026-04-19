@@ -2,12 +2,8 @@ from urllib.parse import urlparse
 
 
 def detect_platform(url: str) -> str:
-    """Detect the social platform from a URL.
-
-    Uses hostname matching (not substring-in-full-URL) to avoid false positives.
-    """
+    """Detect the social platform from a URL. Hostname-based matching."""
     hostname = urlparse(url).hostname or ""
-    # Strip leading "www." / "m." for uniform matching
     bare = hostname.removeprefix("www.").removeprefix("m.")
 
     if bare == "reddit.com" or bare.endswith(".reddit.com"):
@@ -16,6 +12,12 @@ def detect_platform(url: str) -> str:
         return "instagram"
     if bare == "facebook.com" or bare.endswith(".facebook.com") or bare == "fb.com":
         return "facebook"
+    if bare == "hardwarezone.com.sg" or bare.endswith(".hardwarezone.com.sg"):
+        return "hardwarezone"
+    if bare == "youtube.com" or bare.endswith(".youtube.com") or bare == "youtu.be":
+        return "youtube"
+    if bare == "tiktok.com" or bare.endswith(".tiktok.com"):
+        return "tiktok"
     raise ValueError(f"Unsupported platform for URL: {url}")
 
 
@@ -31,4 +33,13 @@ def get_scraper(url: str):
     if platform == "facebook":
         from autoso.scraping.facebook import FacebookScraper
         return FacebookScraper()
+    if platform == "hardwarezone":
+        from autoso.scraping.hardwarezone import HardwareZoneScraper
+        return HardwareZoneScraper()
+    if platform == "youtube":
+        from autoso.scraping.youtube import YouTubeScraper
+        return YouTubeScraper()
+    if platform == "tiktok":
+        from autoso.scraping.tiktok import TikTokScraper
+        return TikTokScraper()
     raise ValueError(f"No scraper registered for platform: {platform}")

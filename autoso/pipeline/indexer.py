@@ -26,10 +26,10 @@ def index_comments(
             text=comment.text,
             metadata={
                 "platform": comment.platform,
-                "comment_id": comment.comment_id,
+                "id": comment.id,
                 "position": comment.position,
             },
-            doc_id=comment.comment_id,
+            doc_id=comment.id,
         )
         for comment in comments
     ]

@@ -8,9 +8,6 @@ _TEST_DEFAULTS = {
     "ANTHROPIC_API_KEY": "test-anthropic-key",
     "SUPABASE_URL": "https://test.supabase.co",
     "SUPABASE_KEY": "test-supabase-key",
-    "REDDIT_CLIENT_ID": "test-reddit-client-id",
-    "REDDIT_CLIENT_SECRET": "test-reddit-secret",
-    "REDDIT_USER_AGENT": "AutoSO/test",
     "WHITELISTED_USER_IDS": "12345",
 }
 for key, val in _TEST_DEFAULTS.items():

@@ -10,23 +10,29 @@ import json
 import sys
 from typing import Literal
 
+from autoso.scraping import flatten_comments
 from autoso.scraping.models import Comment, Post
 
 # Inline canned post for CLI use (tests use the richer one from tests/integration/data.py)
 _CLI_CANNED_POST = Post(
-    title="Singapore NS Policy Discussion",
-    content="Singapore introduces new National Service policy changes for 2024.",
-    url="https://www.reddit.com/r/singapore/comments/cli_test",
+    id="diag_post",
     platform="reddit",
+    url="https://www.reddit.com/r/singapore/comments/cli_test",
+    page_title="r/singapore",
+    post_title="Singapore NS Policy Discussion",
+    date=None,
+    author=None,
+    content="Singapore introduces new National Service policy changes for 2024.",
+    likes=None,
     comments=[
-        Comment(platform="reddit", text="NS has been very beneficial for Singapore's defence.", comment_id="c1", position=0),
-        Comment(platform="reddit", text="The training builds character and discipline in young men.", comment_id="c2", position=1),
-        Comment(platform="reddit", text="MINDEF should improve NSF allowances — the pay is too low.", comment_id="c3", position=2),
-        Comment(platform="reddit", text="NS is a necessary sacrifice for the country's security.", comment_id="c4", position=3),
-        Comment(platform="reddit", text="The new policy changes modernise our defence force.", comment_id="c5", position=4),
-        Comment(platform="reddit", text="Management quality varies a lot across different units.", comment_id="c6", position=5),
-        Comment(platform="reddit", text="NS teaches time management and teamwork.", comment_id="c7", position=6),
-        Comment(platform="reddit", text="Consider the opportunity cost of 2 years for young Singaporeans.", comment_id="c8", position=7),
+        Comment(id="c1", platform="reddit", author=None, date=None, text="NS has been very beneficial for Singapore's defence.", likes=None, position=0),
+        Comment(id="c2", platform="reddit", author=None, date=None, text="The training builds character and discipline in young men.", likes=None, position=1),
+        Comment(id="c3", platform="reddit", author=None, date=None, text="MINDEF should improve NSF allowances — the pay is too low.", likes=None, position=2),
+        Comment(id="c4", platform="reddit", author=None, date=None, text="NS is a necessary sacrifice for the country's security.", likes=None, position=3),
+        Comment(id="c5", platform="reddit", author=None, date=None, text="The new policy changes modernise our defence force.", likes=None, position=4),
+        Comment(id="c6", platform="reddit", author=None, date=None, text="Management quality varies a lot across different units.", likes=None, position=5),
+        Comment(id="c7", platform="reddit", author=None, date=None, text="NS teaches time management and teamwork.", likes=None, position=6),
+        Comment(id="c8", platform="reddit", author=None, date=None, text="Consider the opportunity cost of 2 years for young Singaporeans.", likes=None, position=7),
     ],
 )
 
@@ -53,9 +59,10 @@ def run(post: Post, mode: Literal["texture", "bucket"]) -> dict:
 
     try:
         configure_llm()
-        comment_index = index_comments(post.comments)
+        all_comments = flatten_comments(post)
+        comment_index = index_comments(all_comments)
 
-        comments_text = "\n".join(f"Comment {c.position}: {c.text}" for c in post.comments)
+        comments_text = "\n".join(f"Comment {c.position}: {c.text}" for c in all_comments)
         post_context = (
             f"{post.platform.upper()} POST:\n{post.content}\n\n"
             f"COMMENTS:\n{comments_text}"
@@ -63,7 +70,7 @@ def run(post: Post, mode: Literal["texture", "bucket"]) -> dict:
 
         if mode == "texture":
             system = TEXTURE_SYSTEM_PROMPT
-            full_query = f"{post_context}\n\n{TEXTURE_FORMAT_INSTRUCTION.format(title=post.title)}"
+            full_query = f"{post_context}\n\n{TEXTURE_FORMAT_INSTRUCTION.format(title=post.post_title)}"
 
         elif mode == "bucket":
             from autoso.pipeline.holy_grail import load_holy_grail
@@ -83,7 +90,7 @@ def run(post: Post, mode: Literal["texture", "bucket"]) -> dict:
             full_query = (
                 f"{post_context}\n\n"
                 f"BUCKET HOLY GRAIL REFERENCE:\n{hg_response}\n\n"
-                f"{BUCKET_FORMAT_INSTRUCTION.format(title=post.title)}"
+                f"{BUCKET_FORMAT_INSTRUCTION.format(title=post.post_title)}"
             )
         else:
             return {"ok": False, "mode": mode, "error": f"unknown mode: {mode!r}"}
@@ -97,7 +104,7 @@ def run(post: Post, mode: Literal["texture", "bucket"]) -> dict:
         return {
             "ok": True,
             "mode": mode,
-            "title": post.title,
+            "title": post.post_title,
             "output": output_clean,
             "citation_count": len(citations),
         }

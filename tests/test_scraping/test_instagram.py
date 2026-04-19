@@ -98,6 +98,12 @@ async def test_scrape_returns_post_with_correct_platform(mock_stealth, mock_pw):
     assert isinstance(post, Post)
     assert post.platform == "instagram"
     assert post.url == url
+    assert post.id == "ig_ABC123"
+    assert post.page_title is not None
+    assert post.post_title is not None
+    assert post.date is None
+    assert post.author is None
+    assert post.likes is None
 
 
 @pytest.mark.asyncio
@@ -133,3 +139,11 @@ async def test_scrape_extracts_comments(mock_stealth, mock_pw):
     assert "SAF personnel were very professional" in extracted_texts
     assert "ok" not in extracted_texts
     assert len(post.comments) == 2
+    for c in post.comments:
+        assert c.id.startswith("ig_")
+        assert c.platform == "instagram"
+        assert c.author is None
+        assert c.date is None
+        assert c.likes is None
+        assert isinstance(c.position, int)
+        assert c.subcomments == []

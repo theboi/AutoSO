@@ -12,7 +12,7 @@ class CitationNode:
     citation_number: int
     text: str
     platform: str
-    comment_id: str
+    id: str
     position: int
 
 
@@ -52,7 +52,7 @@ def extract_citations(response) -> List[CitationNode]:
                 citation_number=i + 1,
                 text=node.node.text,
                 platform=node.node.metadata.get("platform", "unknown"),
-                comment_id=node.node.metadata.get("comment_id", f"node_{i}"),
+                id=node.node.metadata.get("id", f"node_{i}"),
                 position=node.node.metadata.get("position", -1),
             )
         )

@@ -26,6 +26,25 @@ def test_detect_facebook_short():
     assert detect_platform("https://fb.com/story.php?id=123") == "facebook"
 
 
+def test_detect_hardwarezone():
+    assert (
+        detect_platform("https://forums.hardwarezone.com.sg/threads/foo.1234/")
+        == "hardwarezone"
+    )
+
+
+def test_detect_youtube_long():
+    assert detect_platform("https://www.youtube.com/watch?v=abc") == "youtube"
+
+
+def test_detect_youtube_short():
+    assert detect_platform("https://youtu.be/abc") == "youtube"
+
+
+def test_detect_tiktok():
+    assert detect_platform("https://www.tiktok.com/@user/video/123") == "tiktok"
+
+
 def test_detect_unsupported_raises():
     with pytest.raises(ValueError, match="Unsupported platform"):
         detect_platform("https://twitter.com/x/status/1")

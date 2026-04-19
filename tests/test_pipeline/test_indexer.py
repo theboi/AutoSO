@@ -1,6 +1,4 @@
-# tests/test_pipeline/test_indexer.py
 import pytest
-from unittest.mock import patch
 from autoso.scraping.models import Comment
 from autoso.pipeline.indexer import index_comments
 
@@ -8,9 +6,12 @@ from autoso.pipeline.indexer import index_comments
 def _make_comments(n: int) -> list[Comment]:
     return [
         Comment(
+            id=f"c{i}",
             platform="reddit",
+            author=None,
+            date=None,
             text=f"Comment {i}: NS training builds discipline and teamwork",
-            comment_id=f"c{i}",
+            likes=None,
             position=i,
         )
         for i in range(n)
@@ -33,14 +34,24 @@ def test_index_stores_platform_metadata():
     nodes = retriever.retrieve("NS training")
     for node in nodes:
         assert node.node.metadata["platform"] == "reddit"
-        assert "comment_id" in node.node.metadata
+        assert "id" in node.node.metadata
         assert "position" in node.node.metadata
 
 
 @pytest.mark.skip(reason="requires live LLM for query")
 def test_two_runs_are_independent():
     c1 = _make_comments(2)
-    c2 = [Comment(platform="instagram", text="IG comment about SAF", comment_id="ig0", position=0)]
+    c2 = [
+        Comment(
+            id="ig0",
+            platform="instagram",
+            author=None,
+            date=None,
+            text="IG comment about SAF",
+            likes=None,
+            position=0,
+        )
+    ]
     idx1 = index_comments(c1)
     idx2 = index_comments(c2)
     assert str(idx1.as_query_engine().query("NS"))

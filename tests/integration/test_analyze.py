@@ -23,7 +23,7 @@ def test_texture_analysis_returns_valid_format():
 
     assert result["ok"] is True, f"Analysis failed: {result.get('error')}"
     assert result.get("skipped") is not True
-    assert result["title"] == CANNED_POST.title
+    assert result["title"] == CANNED_POST.post_title
     assert len(result["output"]) > 0
     # Texture format must contain percentage breakdowns
     assert "%" in result["output"], "Texture output missing percentage markers"

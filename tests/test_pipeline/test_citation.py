@@ -1,15 +1,16 @@
 # tests/test_pipeline/test_citation.py
 import re
 from unittest.mock import MagicMock
-from autoso.pipeline.citation import extract_citations, strip_citation_markers, CitationNode
+
+from autoso.pipeline.citation import extract_citations, strip_citation_markers
 
 
-def _make_source_node(text: str, platform: str, comment_id: str, position: int):
+def _make_source_node(text: str, platform: str, node_id: str, position: int):
     node = MagicMock()
     node.node.text = text
     node.node.metadata = {
         "platform": platform,
-        "comment_id": comment_id,
+        "id": node_id,
         "position": position,
     }
     return node
@@ -27,7 +28,7 @@ def test_extract_citations_maps_nodes_to_citation_numbers():
     assert citations[0].text == "NS is vital"
     assert citations[0].platform == "reddit"
     assert citations[1].citation_number == 2
-    assert citations[1].comment_id == "ig_5"
+    assert citations[1].id == "ig_5"
     assert citations[1].position == 5
 
 

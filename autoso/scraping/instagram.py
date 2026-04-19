@@ -1,13 +1,16 @@
 import asyncio
+import re
+from datetime import datetime
 from typing import List
+
 from playwright.async_api import async_playwright
 from playwright_stealth import Stealth
-from autoso.scraping.playwright_base import PlaywrightScraper
+
 from autoso.scraping.models import Comment, Post, ScrapeError
+from autoso.scraping.playwright_base import PlaywrightScraper
 
 
 async def stealth_async(page):
-    """Apply stealth evasion to a Playwright page."""
     stealth = Stealth()
     await stealth.apply_stealth_async(page)
 
@@ -41,6 +44,10 @@ class InstagramScraper(PlaywrightScraper):
 
             post_content = await self._extract_post_content(page)
             post_title = await self._extract_post_title(page, url)
+            page_title = await self._extract_page_title(page)
+            post_author = await self._extract_post_author(page)
+            post_date = await self._extract_post_date(page)
+            post_likes = await self._extract_post_likes(page)
             await self._expand_comments(page)
             comments = await self._extract_comments(page)
 
@@ -48,10 +55,15 @@ class InstagramScraper(PlaywrightScraper):
             await browser.close()
 
             return Post(
-                title=post_title,
-                content=post_content,
-                url=url,
+                id=_derive_id(url),
                 platform="instagram",
+                url=url,
+                page_title=page_title,
+                post_title=post_title,
+                date=post_date,
+                author=post_author,
+                content=post_content,
+                likes=post_likes,
                 comments=comments,
             )
 
@@ -67,9 +79,48 @@ class InstagramScraper(PlaywrightScraper):
     async def _extract_post_title(self, page, url: str) -> str:
         try:
             el = page.locator("meta[property='og:title']")
-            return await el.get_attribute("content") or url
+            return (await el.get_attribute("content")) or url
         except Exception:
             return url
+
+    async def _extract_page_title(self, page) -> str:
+        try:
+            el = page.locator("meta[property='og:site_name']")
+            return (await el.get_attribute("content")) or "Instagram"
+        except Exception:
+            return "Instagram"
+
+    async def _extract_post_author(self, page) -> str | None:
+        try:
+            el = page.locator("article header a").first
+            if await el.is_visible(timeout=2000):
+                return (await el.inner_text()).strip() or None
+        except Exception:
+            pass
+        return None
+
+    async def _extract_post_date(self, page) -> datetime | None:
+        try:
+            el = page.locator("article time[datetime]").first
+            if await el.is_visible(timeout=2000):
+                ts = await el.get_attribute("datetime")
+                if ts:
+                    return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        except Exception:
+            pass
+        return None
+
+    async def _extract_post_likes(self, page) -> int | None:
+        try:
+            el = page.locator("section button span").first
+            if await el.is_visible(timeout=2000):
+                txt = (await el.inner_text()).replace(",", "")
+                m = re.search(r"\d+", txt)
+                if m:
+                    return int(m.group())
+        except Exception:
+            pass
+        return None
 
     async def _expand_comments(self, page) -> None:
         for _ in range(20):
@@ -86,19 +137,32 @@ class InstagramScraper(PlaywrightScraper):
     async def _extract_comments(self, page) -> List[Comment]:
         els = page.locator("article ul li span[dir='auto']")
         count = await els.count()
-        comments = []
+        comments: List[Comment] = []
+        position = 0
         for i in range(count):
             try:
                 text = (await els.nth(i).inner_text()).strip()
-                if len(text) > 10 and not text.lower().startswith("view"):
-                    comments.append(
-                        Comment(
-                            platform="instagram",
-                            text=text,
-                            comment_id=f"ig_{i}",
-                            position=i,
-                        )
+                if len(text) <= 10 or text.lower().startswith("view"):
+                    continue
+                comments.append(
+                    Comment(
+                        id=f"ig_{i}",
+                        platform="instagram",
+                        author=None,
+                        date=None,
+                        text=text,
+                        likes=None,
+                        position=position,
                     )
+                )
+                position += 1
             except Exception:
                 continue
         return comments
+
+
+def _derive_id(url: str) -> str:
+    m = re.search(r"/p/([A-Za-z0-9_-]+)", url)
+    if m:
+        return f"ig_{m.group(1)}"
+    return f"ig_{abs(hash(url)) % 10_000_000_000}"

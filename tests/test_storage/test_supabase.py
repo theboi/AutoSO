@@ -1,75 +1,94 @@
-# tests/test_storage/test_supabase.py
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
-from autoso.storage.supabase import store_result
+
+from autoso.scraping.models import Comment, Post
+from autoso.storage.supabase import get_recent_scrape, store_result, store_scrape
 
 
-def _mock_supabase_client():
-    client = MagicMock()
-    execute_mock = MagicMock()
-    client.table.return_value.insert.return_value.execute = MagicMock(
-        return_value=execute_mock
+def _sample_post() -> Post:
+    dt = datetime(2026, 4, 18, 9, 0, tzinfo=timezone.utc)
+    return Post(
+        id="p1",
+        platform="reddit",
+        url="https://reddit.com/r/t/x",
+        page_title="r/t",
+        post_title="Title",
+        date=dt,
+        author="op",
+        content="body",
+        likes=5,
+        comments=[
+            Comment(
+                id="c1",
+                platform="reddit",
+                author="a",
+                date=dt,
+                text="hi",
+                likes=1,
+                position=0,
+            )
+        ],
     )
-    return client
 
 
-@patch("autoso.storage.supabase.create_client")
-def test_store_result_inserts_analysis_row(mock_create):
-    client = _mock_supabase_client()
-    mock_create.return_value = client
+@patch("autoso.storage.supabase._get_client")
+def test_store_scrape_inserts_and_returns_id(mock_client):
+    fake = MagicMock()
+    mock_client.return_value = fake
+    fake.table.return_value.insert.return_value.execute.return_value.data = [{"id": "uuid-1"}]
 
-    run_id = store_result(
-        url="https://reddit.com/r/test/comments/abc",
-        mode="texture",
-        title="Test Post",
-        output="- 50% opined that NS is important",
-        output_cited="- 50% opined that NS is important [1]",
-        citation_index=[],
-    )
+    post = _sample_post()
+    scrape_id = store_scrape("https://reddit.com/r/t/x", post)
 
-    assert isinstance(run_id, str)
-    assert len(run_id) == 36
-    client.table.assert_any_call("analyses")
+    assert isinstance(scrape_id, str)
+    args = fake.table.return_value.insert.call_args.args[0]
+    assert args["url"] == "https://reddit.com/r/t/x"
+    assert args["result"]["id"] == "p1"
+    assert args["result"]["comments"][0]["id"] == "c1"
 
 
-@patch("autoso.storage.supabase.create_client")
-def test_store_result_inserts_citation_rows(mock_create):
-    client = _mock_supabase_client()
-    mock_create.return_value = client
+@patch("autoso.storage.supabase._get_client")
+def test_get_recent_scrape_returns_post_when_fresh(mock_client):
+    fake = MagicMock()
+    mock_client.return_value = fake
+    post = _sample_post()
+    recent = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+    (
+        fake.table.return_value.select.return_value.eq.return_value.gte.return_value.order.return_value.limit.return_value.execute.return_value.data
+    ) = [{"id": "uuid-1", "scraped_at": recent, "result": post.to_dict()}]
 
-    citations = [
-        {"citation_number": 1, "text": "NS comment", "platform": "reddit",
-         "comment_id": "c1", "position": 0},
-        {"citation_number": 2, "text": "SAF comment", "platform": "instagram",
-         "comment_id": "ig_5", "position": 5},
-    ]
+    result = get_recent_scrape("https://reddit.com/r/t/x")
+    assert result is not None
+    sid, p = result
+    assert sid == "uuid-1"
+    assert p.id == "p1"
+    assert p.comments[0].id == "c1"
+
+
+@patch("autoso.storage.supabase._get_client")
+def test_get_recent_scrape_returns_none_when_no_rows(mock_client):
+    fake = MagicMock()
+    mock_client.return_value = fake
+    (
+        fake.table.return_value.select.return_value.eq.return_value.gte.return_value.order.return_value.limit.return_value.execute.return_value.data
+    ) = []
+
+    assert get_recent_scrape("https://reddit.com/r/t/x") is None
+
+
+@patch("autoso.storage.supabase._get_client")
+def test_store_result_requires_scrape_id(mock_client):
+    fake = MagicMock()
+    mock_client.return_value = fake
 
     store_result(
-        url="http://x.com",
-        mode="bucket",
-        title="T",
-        output="output",
-        output_cited="output [1] [2]",
-        citation_index=citations,
-    )
-
-    table_calls = [str(c) for c in client.table.call_args_list]
-    assert any("citations" in c for c in table_calls)
-
-
-@patch("autoso.storage.supabase.create_client")
-def test_store_result_skips_citation_insert_when_empty(mock_create):
-    client = _mock_supabase_client()
-    mock_create.return_value = client
-
-    store_result(
-        url="http://x.com",
+        url="u",
         mode="texture",
-        title="T",
-        output="output",
-        output_cited=None,
+        title="t",
+        output="o",
+        output_cited="oc",
         citation_index=[],
+        scrape_id="uuid-1",
     )
-
-    table_names = [c.args[0] for c in client.table.call_args_list]
-    assert "analyses" in table_names
-    assert "citations" not in table_names
+    row = fake.table.return_value.insert.call_args_list[0].args[0]
+    assert row["scrape_id"] == "uuid-1"

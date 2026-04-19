@@ -18,22 +18,23 @@ def run(url: str, platform: str) -> dict:
         {"ok": True, "platform": ..., "url": ..., "comment_count": N, "title": ..., "comments": [...]}
         {"ok": False, "platform": ..., "url": ..., "error": "..."}
     """
-    from autoso.scraping.base import get_scraper
+    from autoso.scraping import flatten_comments, scrape
 
     try:
-        scraper = get_scraper(url)
-        post = scraper.scrape(url)
+        scrape_id, post = scrape(url)
     except Exception as exc:
         return {"ok": False, "platform": platform, "url": url, "error": str(exc)}
 
-    ok = len(post.comments) > 0
+    all_comments = flatten_comments(post)
+    ok = len(all_comments) > 0
     return {
         "ok": ok,
         "platform": platform,
         "url": url,
-        "comment_count": len(post.comments),
-        "title": post.title,
-        "comments": [c.text for c in post.comments],
+        "scrape_id": scrape_id,
+        "comment_count": len(all_comments),
+        "title": post.post_title,
+        "comments": [c.text for c in all_comments],
         **({"error": "zero comments returned"} if not ok else {}),
     }
 

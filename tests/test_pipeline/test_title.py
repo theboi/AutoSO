@@ -6,12 +6,25 @@ from autoso.pipeline.title import infer_title
 
 def _make_post(content: str, comments: list[str]) -> Post:
     return Post(
-        title="",
-        content=content,
-        url="https://reddit.com/r/test/comments/abc",
+        id="p1",
         platform="reddit",
+        url="https://reddit.com/r/test/comments/abc",
+        page_title="r/test",
+        post_title="",
+        date=None,
+        author=None,
+        content=content,
+        likes=None,
         comments=[
-            Comment(platform="reddit", text=t, comment_id=f"c{i}", position=i)
+            Comment(
+                id=f"c{i}",
+                platform="reddit",
+                author=None,
+                date=None,
+                text=t,
+                likes=None,
+                position=i,
+            )
             for i, t in enumerate(comments)
         ],
     )

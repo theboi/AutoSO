@@ -9,8 +9,6 @@ def test_whitelisted_user_ids_parsed_as_integers(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "key")
     monkeypatch.setenv("SUPABASE_URL", "http://x")
     monkeypatch.setenv("SUPABASE_KEY", "k")
-    monkeypatch.setenv("REDDIT_CLIENT_ID", "r")
-    monkeypatch.setenv("REDDIT_CLIENT_SECRET", "s")
 
     import autoso.config as cfg
     importlib.reload(cfg)
@@ -22,8 +20,6 @@ def test_empty_whitelist_gives_empty_set(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "key")
     monkeypatch.setenv("SUPABASE_URL", "http://x")
     monkeypatch.setenv("SUPABASE_KEY", "k")
-    monkeypatch.setenv("REDDIT_CLIENT_ID", "r")
-    monkeypatch.setenv("REDDIT_CLIENT_SECRET", "s")
 
     import autoso.config as cfg
     importlib.reload(cfg)

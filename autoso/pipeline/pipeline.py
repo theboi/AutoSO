@@ -19,7 +19,7 @@ from autoso.pipeline.prompts import (
     TEXTURE_SYSTEM_PROMPT,
 )
 from autoso.pipeline.title import infer_title
-from autoso.scraping.base import get_scraper
+from autoso.scraping import flatten_comments, scrape
 from autoso.storage.supabase import store_result
 
 logger = logging.getLogger(__name__)
@@ -43,11 +43,11 @@ def run_pipeline(
 ) -> PipelineResult:
     configure_llm()
 
-    scraper = get_scraper(url)
-    post = scraper.scrape(url)
-    logger.info("Scraped %d comments from %s", len(post.comments), post.platform)
+    scrape_id, post = scrape(url)
+    all_comments = flatten_comments(post)
+    logger.info("Scraped %d comments from %s", len(all_comments), post.platform)
 
-    if not post.comments:
+    if not all_comments:
         raise RuntimeError(
             f"No comments retrieved from {url}. "
             f"The scraper returned 0 comments — check session cookies, "
@@ -56,10 +56,10 @@ def run_pipeline(
 
     title = provided_title or infer_title(post)
 
-    comment_index = index_comments(post.comments)
+    comment_index = index_comments(all_comments)
 
     comments_text = "\n".join(
-        f"Comment {c.position}: {c.text}" for c in post.comments
+        f"Comment {c.position}: {c.text}" for c in all_comments
     )
     post_context = (
         f"{post.platform.upper()} POST:\n{post.content}\n\n"
@@ -106,11 +106,12 @@ def run_pipeline(
                 "citation_number": c.citation_number,
                 "text": c.text,
                 "platform": c.platform,
-                "comment_id": c.comment_id,
+                "comment_id": c.id,
                 "position": c.position,
             }
             for c in citations
         ],
+        scrape_id=scrape_id,
     )
 
     return PipelineResult(

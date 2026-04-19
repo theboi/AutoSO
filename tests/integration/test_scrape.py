@@ -30,7 +30,6 @@ def _require_session_cookies(platform: str) -> None:
 def test_reddit_scrape_returns_comments():
     if not REDDIT_URL:
         pytest.skip("REDDIT_URL not set in tests/integration/data.py")
-    _require_env("REDDIT_CLIENT_ID", "REDDIT_CLIENT_SECRET")
 
     result = run(REDDIT_URL, "reddit")
 

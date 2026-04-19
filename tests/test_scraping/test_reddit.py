@@ -1,109 +1,196 @@
-import pytest
 from unittest.mock import MagicMock, patch
+
+from autoso.scraping.models import Post
 from autoso.scraping.reddit import RedditScraper
-from autoso.scraping.models import Post, Comment
 
 
-def _make_mock_comment(body: str, id: str, pos: int) -> MagicMock:
-    c = MagicMock()
-    c.body = body
-    c.id = id
-    return c
+def _reddit_json(post_data: dict, comments: list[dict]) -> list:
+    post_listing = {"data": {"children": [{"kind": "t3", "data": post_data}]}}
+    comment_listing = {
+        "data": {"children": [{"kind": "t1", "data": c} for c in comments]}
+    }
+    return [post_listing, comment_listing]
 
 
-def _make_mock_submission(title: str, selftext: str, comments: list) -> MagicMock:
-    sub = MagicMock()
-    sub.title = title
-    sub.selftext = selftext
-    sub.comments.list.return_value = comments
-    sub.comments.replace_more = MagicMock()
-    return sub
+def _mock_response(json_payload):
+    resp = MagicMock()
+    resp.json.return_value = json_payload
+    resp.raise_for_status = MagicMock()
+    return resp
 
 
-@patch("autoso.scraping.reddit.praw.Reddit")
-def test_scrape_returns_post(mock_reddit_cls):
-    raw_comments = [
-        _make_mock_comment("NS is important for defence", "c1", 0),
-        _make_mock_comment("I support MINDEF policies", "c2", 1),
+@patch("autoso.scraping.reddit.httpx.get")
+def test_scrape_builds_post_from_json(mock_get):
+    post_data = {
+        "id": "abc123",
+        "title": "Test Post",
+        "selftext": "Post body",
+        "author": "op_user",
+        "score": 42,
+        "created_utc": 1713436800,
+        "subreddit_name_prefixed": "r/singapore",
+    }
+    comments = [
+        {
+            "id": "c1",
+            "body": "First comment",
+            "author": "user1",
+            "score": 5,
+            "created_utc": 1713436900,
+            "replies": "",
+        },
+        {
+            "id": "c2",
+            "body": "Second comment",
+            "author": "user2",
+            "score": 3,
+            "created_utc": 1713437000,
+            "replies": {
+                "data": {
+                    "children": [
+                        {
+                            "kind": "t1",
+                            "data": {
+                                "id": "r1",
+                                "body": "Reply",
+                                "author": "user3",
+                                "score": 1,
+                                "created_utc": 1713437050,
+                                "replies": "",
+                            },
+                        }
+                    ]
+                }
+            },
+        },
     ]
-    sub = _make_mock_submission("Test Post", "Post body here", raw_comments)
-    mock_reddit_cls.return_value.submission.return_value = sub
+    mock_get.return_value = _mock_response(_reddit_json(post_data, comments))
 
     scraper = RedditScraper()
-    post = scraper.scrape("https://www.reddit.com/r/singapore/comments/abc")
+    post = scraper.scrape("https://www.reddit.com/r/singapore/comments/abc123/test/")
 
     assert isinstance(post, Post)
     assert post.platform == "reddit"
-    assert post.title == "Test Post"
-    assert post.content == "Post body here"
+    assert post.id == "abc123"
+    assert post.post_title == "Test Post"
+    assert post.content == "Post body"
+    assert post.author == "op_user"
+    assert post.likes == 42
+    assert post.page_title == "r/singapore"
+    assert post.date is not None
     assert len(post.comments) == 2
-    assert post.comments[0].text == "NS is important for defence"
-    assert post.comments[0].comment_id == "c1"
+    assert post.comments[0].id == "c1"
+    assert post.comments[0].author == "user1"
+    assert post.comments[0].text == "First comment"
+    assert post.comments[0].likes == 5
     assert post.comments[0].position == 0
-    assert post.comments[1].position == 1
+    assert post.comments[0].subcomments == []
+    assert len(post.comments[1].subcomments) == 1
+    assert post.comments[1].subcomments[0].id == "r1"
+    assert post.comments[1].subcomments[0].text == "Reply"
 
 
-@patch("autoso.scraping.reddit.praw.Reddit")
-def test_scrape_filters_deleted_comments(mock_reddit_cls):
-    raw_comments = [
-        _make_mock_comment("[deleted]", "d1", 0),
-        _make_mock_comment("[removed]", "d2", 1),
-        _make_mock_comment("Normal comment", "c1", 2),
+@patch("autoso.scraping.reddit.httpx.get")
+def test_scrape_filters_deleted_and_removed(mock_get):
+    comments = [
+        {
+            "id": "d1",
+            "body": "[deleted]",
+            "author": "[deleted]",
+            "score": 0,
+            "created_utc": 1713436900,
+            "replies": "",
+        },
+        {
+            "id": "d2",
+            "body": "[removed]",
+            "author": "mod",
+            "score": 0,
+            "created_utc": 1713437000,
+            "replies": "",
+        },
+        {
+            "id": "c1",
+            "body": "Normal",
+            "author": "u",
+            "score": 1,
+            "created_utc": 1713437100,
+            "replies": "",
+        },
     ]
-    sub = _make_mock_submission("Post", "", raw_comments)
-    mock_reddit_cls.return_value.submission.return_value = sub
+    post_data = {
+        "id": "x",
+        "title": "T",
+        "selftext": "",
+        "author": "op",
+        "score": 1,
+        "created_utc": 1,
+        "subreddit_name_prefixed": "r/t",
+    }
+    mock_get.return_value = _mock_response(_reddit_json(post_data, comments))
 
     scraper = RedditScraper()
-    post = scraper.scrape("https://www.reddit.com/r/test/comments/xyz")
+    post = scraper.scrape("https://www.reddit.com/r/t/comments/x/y/")
 
     assert len(post.comments) == 1
-    assert post.comments[0].text == "Normal comment"
+    assert post.comments[0].text == "Normal"
 
 
-@patch("autoso.scraping.reddit.praw.Reddit")
-def test_scrape_uses_title_as_content_when_no_selftext(mock_reddit_cls):
-    raw_comments = [_make_mock_comment("Good point", "c1", 0)]
-    sub = _make_mock_submission("Link Post Title", "", raw_comments)
-    mock_reddit_cls.return_value.submission.return_value = sub
-
-    scraper = RedditScraper()
-    post = scraper.scrape("https://www.reddit.com/r/test/comments/xyz")
-
-    assert post.content == "Link Post Title"
-
-
-@patch("autoso.scraping.reddit.praw.Reddit")
-def test_scrape_keeps_comment_starting_with_deleted_word_in_context(mock_reddit_cls):
-    """A real comment that starts with the word 'deleted' in context must NOT be filtered."""
-    raw_comments = [
-        _make_mock_comment("[deleted] is a common meme response", "c1", 0),  # should be filtered
-        _make_mock_comment("The deleted scene was actually good", "c2", 1),  # must be kept
+@patch("autoso.scraping.reddit.httpx.get")
+def test_scrape_skips_more_kind_nodes(mock_get):
+    post_data = {
+        "id": "x",
+        "title": "T",
+        "selftext": "",
+        "author": "op",
+        "score": 1,
+        "created_utc": 1,
+        "subreddit_name_prefixed": "r/t",
+    }
+    payload = [
+        {"data": {"children": [{"kind": "t3", "data": post_data}]}},
+        {
+            "data": {
+                "children": [
+                    {
+                        "kind": "t1",
+                        "data": {
+                            "id": "c1",
+                            "body": "hi",
+                            "author": "u",
+                            "score": 1,
+                            "created_utc": 2,
+                            "replies": "",
+                        },
+                    },
+                    {"kind": "more", "data": {"count": 100}},
+                ]
+            }
+        },
     ]
-    sub = _make_mock_submission("Post", "body", raw_comments)
-    mock_reddit_cls.return_value.submission.return_value = sub
+    mock_get.return_value = _mock_response(payload)
 
     scraper = RedditScraper()
-    post = scraper.scrape("https://www.reddit.com/r/test/comments/xyz")
+    post = scraper.scrape("https://www.reddit.com/r/t/comments/x/y/")
 
-    texts = [c.text for c in post.comments]
-    assert "[deleted] is a common meme response" not in texts  # exact match filtered
-    assert "The deleted scene was actually good" in texts       # partial match kept
+    assert len(post.comments) == 1
 
 
-@patch("autoso.scraping.reddit.praw.Reddit")
-def test_scrape_positions_are_sequential_after_filtering(mock_reddit_cls):
-    """Positions must be 0-indexed and contiguous after deleted comments are dropped."""
-    raw_comments = [
-        _make_mock_comment("[deleted]", "d1", 0),
-        _make_mock_comment("First real comment", "c1", 1),
-        _make_mock_comment("Second real comment", "c2", 2),
-    ]
-    sub = _make_mock_submission("Post", "body", raw_comments)
-    mock_reddit_cls.return_value.submission.return_value = sub
+@patch("autoso.scraping.reddit.httpx.get")
+def test_scrape_appends_json_suffix(mock_get):
+    post_data = {
+        "id": "x",
+        "title": "T",
+        "selftext": "",
+        "author": "op",
+        "score": 1,
+        "created_utc": 1,
+        "subreddit_name_prefixed": "r/t",
+    }
+    mock_get.return_value = _mock_response(_reddit_json(post_data, []))
 
     scraper = RedditScraper()
-    post = scraper.scrape("https://www.reddit.com/r/test/comments/xyz")
+    scraper.scrape("https://www.reddit.com/r/t/comments/x/y/")
 
-    assert len(post.comments) == 2
-    assert post.comments[0].position == 1  # position reflects original list index
-    assert post.comments[1].position == 2
+    called_url = mock_get.call_args.args[0]
+    assert called_url.endswith(".json")

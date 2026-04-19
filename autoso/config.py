@@ -8,9 +8,6 @@ TELEGRAM_TOKEN: str = os.environ["TELEGRAM_TOKEN"]
 ANTHROPIC_API_KEY: str = os.environ["ANTHROPIC_API_KEY"]
 SUPABASE_URL: str = os.environ["SUPABASE_URL"]
 SUPABASE_KEY: str = os.environ["SUPABASE_KEY"]
-REDDIT_CLIENT_ID: str = os.environ["REDDIT_CLIENT_ID"]
-REDDIT_CLIENT_SECRET: str = os.environ["REDDIT_CLIENT_SECRET"]
-REDDIT_USER_AGENT: str = os.environ.get("REDDIT_USER_AGENT", "AutoSO/1.0")
 
 WHITELISTED_USER_IDS: set[int] = {
     int(uid.strip())

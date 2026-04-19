@@ -15,9 +15,6 @@ _TEST_PLACEHOLDERS = {
     "test-anthropic-key",
     "https://test.supabase.co",
     "test-supabase-key",
-    "test-reddit-client-id",
-    "test-reddit-secret",
-    "AutoSO/test",
 }
 
 
@@ -31,5 +28,4 @@ def is_real_credential(val: str | None) -> bool:
 # if they look it up dynamically.
 _MODULES_TO_PATCH = [
     "autoso.config",
-    "autoso.scraping.reddit",  # does `from autoso.config import REDDIT_CLIENT_ID, ...`
 ]

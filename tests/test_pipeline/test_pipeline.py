@@ -1,29 +1,54 @@
-# tests/test_pipeline/test_pipeline.py
 import re
-from dataclasses import dataclass
 from unittest.mock import MagicMock, patch
+
+from autoso.pipeline.pipeline import PipelineResult, run_pipeline
 from autoso.scraping.models import Comment, Post
-from autoso.pipeline.pipeline import run_pipeline, PipelineResult
 
 
 def _make_post(platform: str = "reddit") -> Post:
     return Post(
-        title="XLS25 Concludes",
-        content="The annual exercise has ended.",
-        url=f"https://{platform}.com/test",
+        id="p1",
         platform=platform,
+        url=f"https://{platform}.com/test",
+        page_title=f"{platform} page",
+        post_title="XLS25 Concludes",
+        date=None,
+        author=None,
+        content="The annual exercise has ended.",
+        likes=None,
         comments=[
-            Comment(platform=platform, text="SAF soldiers were impressive", comment_id="c1", position=0),
-            Comment(platform=platform, text="Good for SG-US bilateral relations", comment_id="c2", position=1),
-            Comment(platform=platform, text="NS builds character and resilience", comment_id="c3", position=2),
+            Comment(
+                id="c1",
+                platform=platform,
+                author=None,
+                date=None,
+                text="SAF soldiers were impressive",
+                likes=None,
+                position=0,
+            ),
+            Comment(
+                id="c2",
+                platform=platform,
+                author=None,
+                date=None,
+                text="Good for SG-US bilateral relations",
+                likes=None,
+                position=1,
+            ),
+            Comment(
+                id="c3",
+                platform=platform,
+                author=None,
+                date=None,
+                text="NS builds character and resilience",
+                likes=None,
+                position=2,
+            ),
         ],
     )
 
 
 def _patch_pipeline(mode: str, post: Post, run_id: str = "run-123"):
-    mock_scraper = MagicMock()
-    mock_scraper.scrape.return_value = post
-
     mock_response = MagicMock()
     mock_response.__str__ = lambda self: (
         "- 60% praised SAF [1]\n- 40% discussed NS [2]"
@@ -36,14 +61,16 @@ def _patch_pipeline(mode: str, post: Post, run_id: str = "run-123"):
     mock_engine.query.return_value = mock_response
 
     patches = [
-        patch("autoso.pipeline.pipeline.get_scraper", return_value=mock_scraper),
+        patch("autoso.pipeline.pipeline.scrape", return_value=("sid-1", post)),
         patch("autoso.pipeline.pipeline.configure_llm"),
         patch("autoso.pipeline.pipeline.store_result", return_value=run_id),
         patch("autoso.pipeline.pipeline.build_citation_engine", return_value=mock_engine),
         patch("autoso.pipeline.pipeline.index_comments", return_value=MagicMock()),
     ]
     if mode == "bucket":
-        patches.append(patch("autoso.pipeline.pipeline.load_holy_grail", return_value=MagicMock()))
+        patches.append(
+            patch("autoso.pipeline.pipeline.load_holy_grail", return_value=MagicMock())
+        )
 
     return patches
 
@@ -51,7 +78,7 @@ def _patch_pipeline(mode: str, post: Post, run_id: str = "run-123"):
 def test_texture_returns_pipeline_result():
     post = _make_post()
     patches = _patch_pipeline("texture", post)
-    mocks = [p.start() for p in patches]
+    started = [p.start() for p in patches]
     try:
         result = run_pipeline(
             url="https://reddit.com/r/test/comments/abc",
@@ -61,7 +88,9 @@ def test_texture_returns_pipeline_result():
         assert isinstance(result, PipelineResult)
         assert result.title == "XLS25 Concludes"
         assert result.run_id == "run-123"
-        assert not re.search(r'\[\d+\]', result.output)
+        assert not re.search(r"\[\d+\]", result.output)
+        _, kwargs = started[2].call_args
+        assert kwargs["scrape_id"] == "sid-1"
     finally:
         for p in patches:
             p.stop()
@@ -100,9 +129,7 @@ def test_texture_uses_provided_title():
 def test_texture_infers_title_when_not_provided():
     post = _make_post()
     patches = _patch_pipeline("texture", post)
-    extra_patch = patch(
-        "autoso.pipeline.pipeline.infer_title", return_value="Inferred Title"
-    )
+    extra_patch = patch("autoso.pipeline.pipeline.infer_title", return_value="Inferred Title")
     [p.start() for p in patches]
     extra_patch.start()
     try:
@@ -116,3 +143,35 @@ def test_texture_infers_title_when_not_provided():
         for p in patches:
             p.stop()
         extra_patch.stop()
+
+
+@patch("autoso.pipeline.pipeline.scrape")
+@patch("autoso.pipeline.pipeline.configure_llm")
+@patch("autoso.pipeline.pipeline.store_result", return_value="run-123")
+@patch("autoso.pipeline.pipeline.build_citation_engine")
+@patch("autoso.pipeline.pipeline.index_comments", return_value=MagicMock())
+def test_pipeline_passes_scrape_id_to_store_result(
+    mock_index,
+    mock_build_engine,
+    mock_store_result,
+    mock_configure,
+    mock_scrape,
+):
+    post = _make_post()
+    mock_scrape.return_value = ("sid-1", post)
+
+    mock_response = MagicMock()
+    mock_response.__str__ = lambda self: "output [1]"
+    mock_response.source_nodes = []
+    mock_engine = MagicMock()
+    mock_engine.query.return_value = mock_response
+    mock_build_engine.return_value = mock_engine
+
+    run_pipeline(
+        url="https://reddit.com/r/test",
+        mode="texture",
+        provided_title="T",
+    )
+
+    _, kwargs = mock_store_result.call_args
+    assert kwargs["scrape_id"] == "sid-1"
