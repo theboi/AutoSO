@@ -1,17 +1,20 @@
-import re
 from unittest.mock import MagicMock, patch
 
+import pytest
+
+from autoso.pipeline.analysis import AnalysisResult, CitationRecord
 from autoso.pipeline.pipeline import PipelineResult, run_pipeline
 from autoso.scraping.models import Comment, Post
 
 
-def _make_post(platform: str = "reddit") -> Post:
+@pytest.fixture
+def post() -> Post:
     return Post(
         id="p1",
-        platform=platform,
-        url=f"https://{platform}.com/test",
-        page_title=f"{platform} page",
-        post_title="XLS25 Concludes",
+        platform="reddit",
+        url="https://reddit.com/r/test/comments/abc",
+        page_title="reddit page",
+        post_title="Post title",
         date=None,
         author=None,
         content="The annual exercise has ended.",
@@ -19,159 +22,201 @@ def _make_post(platform: str = "reddit") -> Post:
         comments=[
             Comment(
                 id="c1",
-                platform=platform,
+                platform="reddit",
                 author=None,
                 date=None,
-                text="SAF soldiers were impressive",
+                text="Strong SAF showing",
                 likes=None,
                 position=0,
-            ),
-            Comment(
-                id="c2",
-                platform=platform,
-                author=None,
-                date=None,
-                text="Good for SG-US bilateral relations",
-                likes=None,
-                position=1,
-            ),
-            Comment(
-                id="c3",
-                platform=platform,
-                author=None,
-                date=None,
-                text="NS builds character and resilience",
-                likes=None,
-                position=2,
-            ),
+            )
         ],
     )
 
 
-def _patch_pipeline(mode: str, post: Post, run_id: str = "run-123"):
-    mock_response = MagicMock()
-    mock_response.__str__ = lambda self: (
-        "- 60% praised SAF [1]\n- 40% discussed NS [2]"
-        if mode == "texture"
-        else "*Positive*\n1.  Praised SAF capability [1]\n\n*Neutral*\n1.  Discussed NS [2]\n\n*Negative*\n1.  Criticised budget [3]"
+@pytest.fixture
+def analysis_result() -> AnalysisResult:
+    return AnalysisResult(
+        output_cited="- Point [1]",
+        output_clean="- Point",
+        citations=[
+            CitationRecord(
+                citation_number=1,
+                text="Strong SAF showing",
+                comment_id="c1",
+                position=0,
+                source_index=0,
+            )
+        ],
     )
-    mock_response.source_nodes = []
 
-    mock_engine = MagicMock()
-    mock_engine.query.return_value = mock_response
 
-    patches = [
-        patch("autoso.pipeline.pipeline.scrape", return_value=("sid-1", post)),
-        patch("autoso.pipeline.pipeline.configure_llm"),
-        patch("autoso.pipeline.pipeline.store_result", return_value=run_id),
-        patch("autoso.pipeline.pipeline.build_citation_engine", return_value=mock_engine),
-        patch("autoso.pipeline.pipeline.index_comments", return_value=MagicMock()),
-    ]
-    if mode == "bucket":
-        patches.append(
-            patch("autoso.pipeline.pipeline.load_holy_grail", return_value=MagicMock())
+def _default_patches(post: Post, analysis: AnalysisResult):
+    pool = MagicMock()
+    return {
+        "configure_llm": patch("autoso.pipeline.pipeline.configure_llm"),
+        "comments_per_link": patch("autoso.pipeline.pipeline.comments_per_link", return_value=500),
+        "flatten_post_comments": patch(
+            "autoso.pipeline.pipeline.flatten_post_comments", return_value=[]
+        ),
+        "build_pool": patch("autoso.pipeline.pipeline.build_pool", return_value=pool),
+        "run_prompt_analysis": patch(
+            "autoso.pipeline.pipeline.run_prompt_analysis", return_value=analysis
+        ),
+        "run_rag_analysis": patch(
+            "autoso.pipeline.pipeline.run_rag_analysis", return_value=analysis
+        ),
+        "store_multi_result": patch(
+            "autoso.pipeline.pipeline.store_multi_result", return_value="run-123"
+        ),
+        "scrape": patch("autoso.pipeline.pipeline.scrape", return_value=("sid-1", post)),
+        "infer_title": patch("autoso.pipeline.pipeline.infer_title", return_value="Inferred Title"),
+        "holy_grail": patch("autoso.pipeline.pipeline._run_holy_grail", return_value="HG"),
+    }
+
+
+def test_texture_single_url_returns_result(post, analysis_result):
+    p = _default_patches(post, analysis_result)
+    with (
+        p["configure_llm"],
+        p["comments_per_link"],
+        p["flatten_post_comments"],
+        p["build_pool"],
+        p["run_prompt_analysis"] as run_prompt,
+        p["run_rag_analysis"],
+        p["store_multi_result"],
+        p["scrape"],
+        p["infer_title"],
+        p["holy_grail"],
+    ):
+        result = run_pipeline(
+            urls=["https://reddit.com/r/test/comments/abc"],
+            mode="texture",
+            analysis_mode="prompt",
+            provided_title="Custom",
         )
 
-    return patches
+    assert isinstance(result, PipelineResult)
+    assert result.title == "Custom"
+    assert result.output == "- Point"
+    assert result.citations == analysis_result.citations
+    run_prompt.assert_called_once()
 
 
-def test_texture_returns_pipeline_result():
-    post = _make_post()
-    patches = _patch_pipeline("texture", post)
-    started = [p.start() for p in patches]
-    try:
-        result = run_pipeline(
-            url="https://reddit.com/r/test/comments/abc",
+def test_multi_url_passes_urls_scrape_ids_and_analysis_mode_to_storage(post, analysis_result):
+    p = _default_patches(post, analysis_result)
+    with (
+        p["configure_llm"],
+        p["comments_per_link"],
+        p["flatten_post_comments"],
+        p["build_pool"],
+        p["run_prompt_analysis"],
+        p["run_rag_analysis"],
+        p["store_multi_result"] as store,
+        patch(
+            "autoso.pipeline.pipeline.scrape",
+            side_effect=[("sid-1", post), ("sid-2", post)],
+        ),
+        p["infer_title"],
+        p["holy_grail"],
+    ):
+        run_pipeline(
+            urls=["https://a.com/post", "https://b.com/post"],
             mode="texture",
-            provided_title="XLS25 Concludes",
+            analysis_mode="prompt",
+            provided_title="T",
         )
-        assert isinstance(result, PipelineResult)
-        assert result.title == "XLS25 Concludes"
-        assert result.run_id == "run-123"
-        assert not re.search(r"\[\d+\]", result.output)
-        _, kwargs = started[2].call_args
-        assert kwargs["scrape_id"] == "sid-1"
-    finally:
-        for p in patches:
-            p.stop()
+
+    _, kwargs = store.call_args
+    assert kwargs["urls"] == ["https://a.com/post", "https://b.com/post"]
+    assert kwargs["scrape_ids"] == ["sid-1", "sid-2"]
+    assert kwargs["analysis_mode"] == "prompt"
 
 
-def test_bucket_loads_holy_grail():
-    post = _make_post()
-    patches = _patch_pipeline("bucket", post)
-    extra_patch = patch("autoso.pipeline.pipeline.infer_title", return_value="Bucket Title")
-    [p.start() for p in patches]
-    extra_patch.start()
-    try:
-        run_pipeline(url="https://reddit.com/r/test/comments/abc", mode="bucket")
-    finally:
-        for p in patches:
-            p.stop()
-        extra_patch.stop()
+def test_rag_mode_dispatches_to_run_rag_analysis(post, analysis_result):
+    p = _default_patches(post, analysis_result)
+    with (
+        p["configure_llm"],
+        p["comments_per_link"],
+        p["flatten_post_comments"],
+        p["build_pool"],
+        p["run_prompt_analysis"] as run_prompt,
+        p["run_rag_analysis"] as run_rag,
+        p["store_multi_result"],
+        p["scrape"],
+        p["infer_title"],
+        p["holy_grail"],
+    ):
+        run_pipeline(urls=["https://a.com/post"], mode="texture", analysis_mode="rag")
+
+    run_rag.assert_called_once()
+    run_prompt.assert_not_called()
 
 
-def test_texture_uses_provided_title():
-    post = _make_post()
-    patches = _patch_pipeline("texture", post)
-    [p.start() for p in patches]
-    try:
+def test_bucket_uses_holy_grail_and_passes_hg_block(post, analysis_result):
+    p = _default_patches(post, analysis_result)
+    with (
+        p["configure_llm"],
+        p["comments_per_link"],
+        p["flatten_post_comments"],
+        p["build_pool"],
+        p["run_prompt_analysis"] as run_prompt,
+        p["run_rag_analysis"],
+        p["store_multi_result"],
+        p["scrape"],
+        p["infer_title"],
+        p["holy_grail"] as holy,
+    ):
+        run_pipeline(urls=["https://a.com/post"], mode="bucket", analysis_mode="prompt")
+
+    holy.assert_called_once()
+    assert run_prompt.call_args.kwargs["hg_block"] == "HG"
+
+
+def test_texture_skips_holy_grail(post, analysis_result):
+    p = _default_patches(post, analysis_result)
+    with (
+        p["configure_llm"],
+        p["comments_per_link"],
+        p["flatten_post_comments"],
+        p["build_pool"],
+        p["run_prompt_analysis"] as run_prompt,
+        p["run_rag_analysis"],
+        p["store_multi_result"],
+        p["scrape"],
+        p["infer_title"],
+        p["holy_grail"] as holy,
+    ):
+        run_pipeline(urls=["https://a.com/post"], mode="texture", analysis_mode="prompt")
+
+    holy.assert_not_called()
+    assert run_prompt.call_args.kwargs["hg_block"] is None
+
+
+def test_empty_urls_raises_value_error():
+    with pytest.raises(ValueError, match="non-empty"):
+        run_pipeline(urls=[], mode="texture")
+
+
+def test_infer_title_used_when_no_title(post, analysis_result):
+    p = _default_patches(post, analysis_result)
+    with (
+        p["configure_llm"],
+        p["comments_per_link"],
+        p["flatten_post_comments"],
+        p["build_pool"],
+        p["run_prompt_analysis"],
+        p["run_rag_analysis"],
+        p["store_multi_result"],
+        p["scrape"],
+        p["infer_title"] as infer,
+        p["holy_grail"],
+    ):
         result = run_pipeline(
-            url="https://reddit.com/r/test",
+            urls=["https://a.com/post"],
             mode="texture",
-            provided_title="My Custom Title",
-        )
-        assert result.title == "My Custom Title"
-    finally:
-        for p in patches:
-            p.stop()
-
-
-def test_texture_infers_title_when_not_provided():
-    post = _make_post()
-    patches = _patch_pipeline("texture", post)
-    extra_patch = patch("autoso.pipeline.pipeline.infer_title", return_value="Inferred Title")
-    [p.start() for p in patches]
-    extra_patch.start()
-    try:
-        result = run_pipeline(
-            url="https://reddit.com/r/test",
-            mode="texture",
+            analysis_mode="prompt",
             provided_title=None,
         )
-        assert result.title == "Inferred Title"
-    finally:
-        for p in patches:
-            p.stop()
-        extra_patch.stop()
 
-
-@patch("autoso.pipeline.pipeline.scrape")
-@patch("autoso.pipeline.pipeline.configure_llm")
-@patch("autoso.pipeline.pipeline.store_result", return_value="run-123")
-@patch("autoso.pipeline.pipeline.build_citation_engine")
-@patch("autoso.pipeline.pipeline.index_comments", return_value=MagicMock())
-def test_pipeline_passes_scrape_id_to_store_result(
-    mock_index,
-    mock_build_engine,
-    mock_store_result,
-    mock_configure,
-    mock_scrape,
-):
-    post = _make_post()
-    mock_scrape.return_value = ("sid-1", post)
-
-    mock_response = MagicMock()
-    mock_response.__str__ = lambda self: "output [1]"
-    mock_response.source_nodes = []
-    mock_engine = MagicMock()
-    mock_engine.query.return_value = mock_response
-    mock_build_engine.return_value = mock_engine
-
-    run_pipeline(
-        url="https://reddit.com/r/test",
-        mode="texture",
-        provided_title="T",
-    )
-
-    _, kwargs = mock_store_result.call_args
-    assert kwargs["scrape_id"] == "sid-1"
+    infer.assert_called_once_with(post)
+    assert result.title == "Inferred Title"

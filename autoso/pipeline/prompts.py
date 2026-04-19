@@ -82,6 +82,8 @@ Here is a list of acronyms which must be used:
 """
 
 TEXTURE_FORMAT_INSTRUCTION = """\
+When multiple sources are provided, the percentages reflect the combined comment pool across all sources.
+
 Format your response EXACTLY as follows (replace placeholders):
 
 *{title}*
@@ -90,12 +92,12 @@ Format your response EXACTLY as follows (replace placeholders):
 - Y% discussed...
 - Z% criticised...
 - N comments opined that <SAF/MINDEF/NS/defence mention>
-- The rest (~X%) are frivolous
-
-CRITICAL: Do NOT include citation markers such as [1], [2], [N] anywhere in your output.\
+- The rest (~X%) are frivolous\
 """
 
 BUCKET_FORMAT_INSTRUCTION = """\
+When multiple sources are provided, the percentages reflect the combined comment pool across all sources.
+
 Format your response EXACTLY as follows (replace placeholders):
 
 *{title}*
@@ -110,7 +112,5 @@ Format your response EXACTLY as follows (replace placeholders):
 *Negative*
 1.  Criticised...
 
-Pre-emptives are pos X, neu Y, neg Z
-
-CRITICAL: Do NOT include citation markers such as [1], [2], [N] anywhere in your output.\
+Pre-emptives are pos X, neu Y, neg Z\
 """

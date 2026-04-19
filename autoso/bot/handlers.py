@@ -18,6 +18,11 @@ from autoso.transcription.transcription import transcribe_url
 logger = logging.getLogger(__name__)
 
 TELEGRAM_MAX_LENGTH = 4096
+MAX_URLS = 50
+
+
+class ArgParseError(ValueError):
+    pass
 
 
 def _split_message(text: str, limit: int = TELEGRAM_MAX_LENGTH) -> list[str]:
@@ -48,12 +53,75 @@ def _is_valid_url(text: str) -> bool:
         return False
 
 
+def _parse_analysis_args(args: list[str]) -> tuple[list[str], str, str | None]:
+    if not args:
+        raise ArgParseError("No arguments provided.")
+
+    urls: list[str] = []
+    analysis_mode = "prompt"
+    title: str | None = None
+
+    i = 0
+    while i < len(args):
+        token = args[i]
+
+        if token in ("-m", "--mode"):
+            if i + 1 >= len(args):
+                raise ArgParseError("Missing value for -m/--mode.")
+            mode_value = args[i + 1].strip().lower()
+            if mode_value not in ("prompt", "rag"):
+                raise ArgParseError(f"Invalid mode: {mode_value!r}. Use prompt or rag.")
+            analysis_mode = mode_value
+            i += 2
+            continue
+
+        if token.startswith('"') or token.startswith("'"):
+            if title is not None:
+                raise ArgParseError("Only one title is allowed.")
+            quote = token[0]
+            if len(token) > 1 and token.endswith(quote):
+                title = token[1:-1]
+                i += 1
+                continue
+            parts = [token[1:]]
+            i += 1
+            while i < len(args):
+                part = args[i]
+                if part.endswith(quote):
+                    parts.append(part[:-1])
+                    title = " ".join(parts)
+                    i += 1
+                    break
+                parts.append(part)
+                i += 1
+            else:
+                raise ArgParseError("Unterminated quoted title.")
+            continue
+
+        if token.startswith("-"):
+            raise ArgParseError(f"Unknown option: {token!r}.")
+
+        if _is_valid_url(token):
+            urls.append(token)
+            if len(urls) > MAX_URLS:
+                raise ArgParseError(f"Too many URLs (max {MAX_URLS}).")
+            i += 1
+            continue
+
+        raise ArgParseError(f"Invalid or stray token: {token!r}.")
+
+    if not urls:
+        raise ArgParseError("At least one valid URL is required.")
+
+    return urls, analysis_mode, title
+
+
 @require_auth
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "AutoSO ready.\n\n"
-        "/texture <url> [title] — Texture analysis\n"
-        "/bucket <url> [title] — Bucket analysis\n"
+        '/texture <url> [url ...] [-m prompt|rag] ["Title"] — Texture analysis\n'
+        '/bucket <url> [url ...] [-m prompt|rag] ["Title"] — Bucket analysis\n'
         "/transcribe <url> [title] — Transcribe audio/video"
     )
 
@@ -71,27 +139,28 @@ async def bucket_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def _handle_analysis(
     update: Update, context: ContextTypes.DEFAULT_TYPE, mode: str
 ):
-    args = context.args
-    if not args:
-        await update.message.reply_text(f"Usage: /{mode} <url> [optional title]")
+    usage = f'/{mode} <url> [url ...] [-m prompt|rag] ["Title"]'
+    try:
+        urls, analysis_mode, provided_title = _parse_analysis_args(context.args or [])
+    except ArgParseError as e:
+        await update.message.reply_text(f"{e}\nUsage: {usage}")
         return
 
-    url = args[0]
-    if not _is_valid_url(url):
-        await update.message.reply_text(
-            f"Invalid URL: {url!r}\nUsage: /{mode} <url> [optional title]"
-        )
-        return
-
-    provided_title = " ".join(args[1:]) if len(args) > 1 else None
-
-    await update.message.reply_text("Processing... this may take a minute.")
+    await update.message.reply_text(
+        f"Processing {len(urls)} link(s) with {analysis_mode} mode... this may take a minute."
+    )
 
     try:
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(
             _pipeline_executor,
-            functools.partial(run_pipeline, url=url, mode=mode, provided_title=provided_title),
+            functools.partial(
+                run_pipeline,
+                urls=urls,
+                mode=mode,
+                analysis_mode=analysis_mode,
+                provided_title=provided_title,
+            ),
         )
         output = result.output
 
@@ -111,7 +180,12 @@ async def _handle_analysis(
                 await update.message.reply_text(chunk)
 
     except Exception:
-        logger.exception("Pipeline error for url=%s mode=%s", url, mode)
+        logger.exception(
+            "Pipeline error for urls=%s mode=%s analysis_mode=%s",
+            urls,
+            mode,
+            analysis_mode,
+        )
         await update.message.reply_text(
             "An error occurred while processing your request. Check logs for details."
         )

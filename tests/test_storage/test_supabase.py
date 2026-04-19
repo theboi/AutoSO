@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 from autoso.scraping.models import Comment, Post
-from autoso.storage.supabase import get_recent_scrape, store_result, store_scrape
+from autoso.storage.supabase import get_recent_scrape, store_scrape
 
 
 def _sample_post() -> Post:
@@ -74,21 +74,3 @@ def test_get_recent_scrape_returns_none_when_no_rows(mock_client):
     ) = []
 
     assert get_recent_scrape("https://reddit.com/r/t/x") is None
-
-
-@patch("autoso.storage.supabase._get_client")
-def test_store_result_requires_scrape_id(mock_client):
-    fake = MagicMock()
-    mock_client.return_value = fake
-
-    store_result(
-        url="u",
-        mode="texture",
-        title="t",
-        output="o",
-        output_cited="oc",
-        citation_index=[],
-        scrape_id="uuid-1",
-    )
-    row = fake.table.return_value.insert.call_args_list[0].args[0]
-    assert row["scrape_id"] == "uuid-1"

@@ -1,41 +1,29 @@
-# tests/test_pipeline/test_citation.py
 import re
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
-from autoso.pipeline.citation import extract_citations, strip_citation_markers
-
-
-def _make_source_node(text: str, platform: str, node_id: str, position: int):
-    node = MagicMock()
-    node.node.text = text
-    node.node.metadata = {
-        "platform": platform,
-        "id": node_id,
-        "position": position,
-    }
-    return node
+from autoso.pipeline.citation import build_citation_engine, strip_citation_markers
 
 
-def test_extract_citations_maps_nodes_to_citation_numbers():
-    response = MagicMock()
-    response.source_nodes = [
-        _make_source_node("NS is vital", "reddit", "c1", 0),
-        _make_source_node("SAF is strong", "instagram", "ig_5", 5),
-    ]
-    citations = extract_citations(response)
-    assert len(citations) == 2
-    assert citations[0].citation_number == 1
-    assert citations[0].text == "NS is vital"
-    assert citations[0].platform == "reddit"
-    assert citations[1].citation_number == 2
-    assert citations[1].id == "ig_5"
-    assert citations[1].position == 5
+def test_build_citation_engine_uses_default_chunk_size():
+    index = MagicMock()
+    with patch("autoso.pipeline.citation.CitationQueryEngine.from_args", return_value=MagicMock()) as mock_from_args:
+        build_citation_engine(index)
+
+    _, kwargs = mock_from_args.call_args
+    assert kwargs["similarity_top_k"] == 10
+    assert kwargs["citation_chunk_size"] == 512
+    assert "text_qa_template" not in kwargs
 
 
-def test_extract_citations_returns_empty_for_no_sources():
-    response = MagicMock()
-    response.source_nodes = []
-    assert extract_citations(response) == []
+def test_build_citation_engine_accepts_custom_chunk_size_and_prompt():
+    index = MagicMock()
+    with patch("autoso.pipeline.citation.CitationQueryEngine.from_args", return_value=MagicMock()) as mock_from_args:
+        build_citation_engine(index, similarity_top_k=7, system_prompt="do x", citation_chunk_size=4096)
+
+    _, kwargs = mock_from_args.call_args
+    assert kwargs["similarity_top_k"] == 7
+    assert kwargs["citation_chunk_size"] == 4096
+    assert "text_qa_template" in kwargs
 
 
 def test_strip_citation_markers_removes_numbers():
@@ -56,5 +44,5 @@ def test_strip_citation_markers_handles_no_markers():
 def test_strip_citation_markers_handles_consecutive_markers():
     text = "Point about SAF [1][2][3] and defence"
     result = strip_citation_markers(text)
-    assert not re.search(r'\[\d+\]', result)
+    assert not re.search(r"\[\d+\]", result)
     assert "Point about SAF" in result

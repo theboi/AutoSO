@@ -1,11 +1,10 @@
-# autoso/storage/supabase.py
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional
 
-from supabase import create_client, Client
+from supabase import Client, create_client
 
 import autoso.config as config
+from autoso.pipeline.analysis import AnalysisResult
 from autoso.scraping.models import Post
 
 
@@ -52,43 +51,59 @@ def get_recent_scrape(url: str) -> tuple[str, Post] | None:
     return row["id"], Post.from_dict(row["result"])
 
 
-def store_result(
-    url: str,
+def store_multi_result(
+    urls: list[str],
+    scrape_ids: list[str],
     mode: str,
+    analysis_mode: str,
     title: str,
-    output: str,
-    output_cited: Optional[str],
-    citation_index: List[dict],
-    scrape_id: str,
+    analysis: AnalysisResult,
 ) -> str:
-    """Persist an analysis result and its citations. Returns the run_id (UUID)."""
+    """Insert analysis + sources + citations. Returns run_id."""
+    if len(urls) != len(scrape_ids):
+        raise ValueError("urls and scrape_ids must be the same length")
+
     client = _get_client()
     run_id = str(uuid.uuid4())
 
     client.table("analyses").insert(
         {
             "id": run_id,
-            "url": url,
             "mode": mode,
-                "title": title,
-                "output": output,
-                "output_cited": output_cited,
-                "scrape_id": scrape_id,
-            }
+            "analysis_mode": analysis_mode,
+            "title": title,
+            "output": analysis.output_clean,
+            "output_cited": analysis.output_cited,
+        }
     ).execute()
 
-    if citation_index:
-        rows = [
+    source_rows = [
+        {
+            "analysis_id": run_id,
+            "url": url,
+            "link_index": i,
+            "scrape_id": scrape_ids[i],
+        }
+        for i, url in enumerate(urls)
+    ]
+    sources_resp = client.table("analysis_sources").insert(source_rows).execute()
+    source_rows_returned = sources_resp.data or []
+    source_id_by_index: dict[int, str] = {
+        row["link_index"]: row["id"] for row in source_rows_returned
+    }
+
+    if analysis.citations:
+        citation_rows = [
             {
                 "run_id": run_id,
-                "citation_number": c["citation_number"],
-                "text": c["text"],
-                "platform": c["platform"],
-                "comment_id": c.get("comment_id"),
-                "position": c.get("position"),
+                "source_id": source_id_by_index.get(c.source_index),
+                "citation_number": c.citation_number,
+                "text": c.text,
+                "comment_id": c.comment_id,
+                "position": c.position,
             }
-            for c in citation_index
+            for c in analysis.citations
         ]
-        client.table("citations").insert(rows).execute()
+        client.table("citations").insert(citation_rows).execute()
 
     return run_id

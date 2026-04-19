@@ -10,7 +10,6 @@ import json
 import sys
 from typing import Literal
 
-from autoso.scraping import flatten_comments
 from autoso.scraping.models import Comment, Post
 
 # Inline canned post for CLI use (tests use the richer one from tests/integration/data.py)
@@ -37,76 +36,75 @@ _CLI_CANNED_POST = Post(
 )
 
 
-def run(post: Post, mode: Literal["texture", "bucket"]) -> dict:
+def run(
+    post: Post,
+    mode: Literal["texture", "bucket"],
+    analysis_mode: Literal["prompt", "rag"] = "prompt",
+) -> dict:
     """Run LLM analysis on post and return a result dict.
-
-    Skips (ok=True, skipped=True) for bucket mode if Holy Grail is not ingested.
 
     Returns:
         {"ok": True, "mode": ..., "title": ..., "output": ..., "citation_count": N}
-        {"ok": True, "skipped": True, "reason": "..."}   # bucket without holy grail
+        {"ok": True, "mode": ..., "skipped": True, "reason": "..."}  # bucket without holy grail
         {"ok": False, "mode": ..., "error": "..."}
     """
-    from autoso.pipeline.citation import build_citation_engine, extract_citations, strip_citation_markers
-    from autoso.pipeline.indexer import index_comments
+    from autoso.pipeline.flatten import flatten_post_comments
     from autoso.pipeline.llm import configure_llm
-    from autoso.pipeline.prompts import (
-        BUCKET_FORMAT_INSTRUCTION,
-        BUCKET_SYSTEM_PROMPT,
-        TEXTURE_FORMAT_INSTRUCTION,
-        TEXTURE_SYSTEM_PROMPT,
-    )
+    from autoso.pipeline.pool import build_pool
+    from autoso.pipeline.prompt_analysis import run_prompt_analysis
+    from autoso.pipeline.rag_analysis import run_rag_analysis
 
     try:
+        if mode not in {"texture", "bucket"}:
+            return {"ok": False, "mode": mode, "error": f"unknown mode: {mode!r}"}
+
         configure_llm()
-        all_comments = flatten_comments(post)
-        comment_index = index_comments(all_comments)
 
-        comments_text = "\n".join(f"Comment {c.position}: {c.text}" for c in all_comments)
-        post_context = (
-            f"{post.platform.upper()} POST:\n{post.content}\n\n"
-            f"COMMENTS:\n{comments_text}"
-        )
+        title = post.post_title
+        flattened = [flatten_post_comments(post=post, n_cap=500, source_index=0)]
+        pool = build_pool(posts=[post], flattened=flattened)
 
-        if mode == "texture":
-            system = TEXTURE_SYSTEM_PROMPT
-            full_query = f"{post_context}\n\n{TEXTURE_FORMAT_INSTRUCTION.format(title=post.post_title)}"
-
-        elif mode == "bucket":
-            from autoso.pipeline.holy_grail import load_holy_grail
+        hg_block = None
+        if mode == "bucket":
             try:
-                holy_grail_index = load_holy_grail()
+                from autoso.pipeline.pipeline import _run_holy_grail
+
+                hg_block = _run_holy_grail()
             except RuntimeError:
                 return {
                     "ok": True,
+                    "mode": mode,
                     "skipped": True,
                     "reason": "Holy Grail not ingested — run: python scripts/ingest_holy_grail.py <path>",
                 }
-            system = BUCKET_SYSTEM_PROMPT
-            hg_engine = build_citation_engine(holy_grail_index, similarity_top_k=20)
-            hg_response = hg_engine.query(
-                "List all bucket labels for MINDEF/SAF/NS/Defence sentiment analysis"
+
+        if analysis_mode == "prompt":
+            analysis = run_prompt_analysis(
+                mode=mode,
+                title=title,
+                pool=pool,
+                hg_block=hg_block,
             )
-            full_query = (
-                f"{post_context}\n\n"
-                f"BUCKET HOLY GRAIL REFERENCE:\n{hg_response}\n\n"
-                f"{BUCKET_FORMAT_INSTRUCTION.format(title=post.post_title)}"
+        elif analysis_mode == "rag":
+            analysis = run_rag_analysis(
+                mode=mode,
+                title=title,
+                pool=pool,
+                hg_block=hg_block,
             )
         else:
-            return {"ok": False, "mode": mode, "error": f"unknown mode: {mode!r}"}
-
-        engine = build_citation_engine(comment_index, system_prompt=system)
-        response = engine.query(full_query)
-        output_cited = str(response)
-        output_clean = strip_citation_markers(output_cited)
-        citations = extract_citations(response)
+            return {
+                "ok": False,
+                "mode": mode,
+                "error": f"unknown analysis_mode: {analysis_mode!r}",
+            }
 
         return {
             "ok": True,
             "mode": mode,
-            "title": post.post_title,
-            "output": output_clean,
-            "citation_count": len(citations),
+            "title": title,
+            "output": analysis.output_clean,
+            "citation_count": len(analysis.citations),
         }
 
     except Exception as exc:
@@ -116,8 +114,9 @@ def run(post: Post, mode: Literal["texture", "bucket"]) -> dict:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Live LLM analysis diagnostic")
     parser.add_argument("--mode", choices=["texture", "bucket"], default="texture")
+    parser.add_argument("--analysis-mode", choices=["prompt", "rag"], default="prompt")
     args = parser.parse_args()
 
-    result = run(_CLI_CANNED_POST, args.mode)
+    result = run(_CLI_CANNED_POST, args.mode, analysis_mode=args.analysis_mode)
     print(json.dumps(result, indent=2))
     sys.exit(0 if result["ok"] else 1)

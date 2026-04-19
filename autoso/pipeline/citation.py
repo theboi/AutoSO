@@ -1,33 +1,29 @@
-# autoso/pipeline/citation.py
 import re
-from dataclasses import dataclass
-from typing import List
 
 from llama_index.core import VectorStoreIndex
 from llama_index.core.query_engine import CitationQueryEngine
-
-
-@dataclass
-class CitationNode:
-    citation_number: int
-    text: str
-    platform: str
-    id: str
-    position: int
 
 
 def build_citation_engine(
     index: VectorStoreIndex,
     similarity_top_k: int = 10,
     system_prompt: str | None = None,
+    citation_chunk_size: int = 512,
 ) -> CitationQueryEngine:
-    """Build a CitationQueryEngine that annotates its response with [N] markers."""
+    """Build a CitationQueryEngine that annotates its response with [N] markers.
+
+    `citation_chunk_size` controls how the engine splits documents into citable
+    chunks. For flat-comment indexing (Phase 1Y RAG mode) a large value like
+    4096 keeps each comment in a single chunk so citation numbers map 1:1 to
+    comments instead of splitting one comment across multiple [N] markers.
+    """
     kwargs: dict = {
         "similarity_top_k": similarity_top_k,
-        "citation_chunk_size": 512,
+        "citation_chunk_size": citation_chunk_size,
     }
     if system_prompt:
         from llama_index.core import PromptTemplate
+
         qa_template = PromptTemplate(
             "INSTRUCTIONS:\n" + system_prompt + "\n\n"
             "Context information is below.\n"
@@ -41,22 +37,6 @@ def build_citation_engine(
         )
         kwargs["text_qa_template"] = qa_template
     return CitationQueryEngine.from_args(index, **kwargs)
-
-
-def extract_citations(response) -> List[CitationNode]:
-    """Extract source node metadata from a CitationQueryEngine response."""
-    nodes = []
-    for i, node in enumerate(response.source_nodes):
-        nodes.append(
-            CitationNode(
-                citation_number=i + 1,
-                text=node.node.text,
-                platform=node.node.metadata.get("platform", "unknown"),
-                id=node.node.metadata.get("id", f"node_{i}"),
-                position=node.node.metadata.get("position", -1),
-            )
-        )
-    return nodes
 
 
 def strip_citation_markers(text: str) -> str:

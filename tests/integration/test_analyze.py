@@ -1,8 +1,12 @@
-# tests/integration/test_analyze.py
 import os
 from pathlib import Path
+from unittest.mock import patch
+
 import pytest
+
 from autoso.diagnostics.analyze import run
+from autoso.pipeline.analysis import AnalysisResult
+from autoso.pipeline.pipeline import run_pipeline
 from tests.integration.data import CANNED_POST, FACEBOOK_URL
 from tests.integration._helpers import is_real_credential
 
@@ -73,3 +77,32 @@ def test_bucket_analysis_returns_valid_format_or_skips_if_no_holy_grail():
     assert "positive" in output_lower or "negative" in output_lower, (
         "Bucket output missing expected sentiment sections (Positive/Negative)"
     )
+
+
+@pytest.mark.integration
+def test_texture_multi_url_prompt_mode():
+    """Integration-style regression: storage receives both URLs in prompt mode."""
+    _require_anthropic()
+
+    analysis = AnalysisResult(output_cited="- Point [1]", output_clean="- Point", citations=[])
+
+    with (
+        patch(
+            "autoso.pipeline.pipeline.scrape",
+            side_effect=[("sid-1", CANNED_POST), ("sid-2", CANNED_POST)],
+        ),
+        patch("autoso.pipeline.pipeline.store_multi_result", return_value="run-xyz") as mock_store,
+        patch("autoso.pipeline.pipeline.run_prompt_analysis", return_value=analysis),
+    ):
+        result = run_pipeline(
+            urls=["https://a.example/x", "https://b.example/y"],
+            mode="texture",
+            analysis_mode="prompt",
+            provided_title="Integration Multi URL",
+        )
+
+    assert result.run_id == "run-xyz"
+    _, kwargs = mock_store.call_args
+    assert kwargs["urls"] == ["https://a.example/x", "https://b.example/y"]
+    assert kwargs["analysis_mode"] == "prompt"
+    assert len(kwargs["scrape_ids"]) == 2
