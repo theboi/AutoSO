@@ -41,8 +41,8 @@ def _split_message(text: str, limit: int = TELEGRAM_MAX_LENGTH) -> list[str]:
     return chunks
 
 
-# Shared executor — pipeline runs (scrape + LLM) are CPU/IO-heavy synchronous work.
-_pipeline_executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="pipeline")
+# Serial queue: prevents concurrent Playwright launches from OOM-crashing the browser.
+_pipeline_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pipeline")
 
 
 def _is_valid_url(text: str) -> bool:
@@ -147,7 +147,7 @@ async def _handle_analysis(
         return
 
     await update.message.reply_text(
-        f"Processing {len(urls)} link(s) with {analysis_mode} mode... this may take a minute."
+        f"Queued {len(urls)} link(s) with {analysis_mode} mode. Processing now — this may take a minute."
     )
 
     try:
