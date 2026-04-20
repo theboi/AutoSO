@@ -55,7 +55,6 @@ def store_multi_result(
     urls: list[str],
     scrape_ids: list[str],
     mode: str,
-    analysis_mode: str,
     title: str,
     analysis: AnalysisResult,
 ) -> str:
@@ -70,7 +69,6 @@ def store_multi_result(
         {
             "id": run_id,
             "mode": mode,
-            "analysis_mode": analysis_mode,
             "title": title,
             "output": analysis.output_clean,
             "output_cited": analysis.output_cited,
@@ -96,7 +94,7 @@ def store_multi_result(
         citation_rows = [
             {
                 "run_id": run_id,
-                "source_id": source_id_by_index.get(c.source_index),
+                "source_id": source_id_by_index[c.source_index],
                 "citation_number": c.citation_number,
                 "text": c.text,
                 "comment_id": c.comment_id,

@@ -46,7 +46,6 @@ def test_store_multi_result_inserts_analysis_sources_and_citations():
             urls=["https://a.com", "https://b.com"],
             scrape_ids=["sid-a", "sid-b"],
             mode="texture",
-            analysis_mode="prompt",
             title="My Title",
             analysis=analysis,
         )
@@ -87,7 +86,6 @@ def test_store_multi_result_resolves_source_id_via_source_index():
             urls=["https://a.com", "https://b.com"],
             scrape_ids=["sid-a", "sid-b"],
             mode="texture",
-            analysis_mode="prompt",
             title="T",
             analysis=analysis,
         )
@@ -104,7 +102,6 @@ def test_store_multi_result_resolves_source_id_via_source_index():
     analyses_inserts = [rows for name, rows in insert_log if name == "analyses"]
     assert analyses_inserts
     analysis_row = analyses_inserts[0][0]
-    assert analysis_row["analysis_mode"] == "prompt"
     assert analysis_row["mode"] == "texture"
     assert analysis_row["title"] == "T"
     assert "url" not in analysis_row
@@ -157,7 +154,6 @@ def test_store_multi_result_inserts_analysis_source_rows_with_url_scrape_and_ind
             urls=["https://a.com", "https://b.com"],
             scrape_ids=["sid-a", "sid-b"],
             mode="texture",
-            analysis_mode="prompt",
             title="T",
             analysis=analysis,
         )

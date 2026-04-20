@@ -74,7 +74,6 @@ def run_pipeline(
         urls=urls,
         scrape_ids=scrape_ids,
         mode=mode,
-        analysis_mode="citation",
         title=title,
         analysis=analysis,
     )
