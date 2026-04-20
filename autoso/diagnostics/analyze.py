@@ -39,7 +39,6 @@ _CLI_CANNED_POST = Post(
 def run(
     post: Post,
     mode: Literal["texture", "bucket"],
-    analysis_mode: Literal["prompt", "rag"] = "prompt",
 ) -> dict:
     """Run LLM analysis on post and return a result dict.
 
@@ -51,8 +50,7 @@ def run(
     from autoso.pipeline.flatten import flatten_post_comments
     from autoso.pipeline.llm import configure_llm
     from autoso.pipeline.pool import build_pool
-    from autoso.pipeline.prompt_analysis import run_prompt_analysis
-    from autoso.pipeline.rag_analysis import run_rag_analysis
+    from autoso.pipeline.run_analysis import run_analysis
 
     try:
         if mode not in {"texture", "bucket"}:
@@ -78,26 +76,12 @@ def run(
                     "reason": "Holy Grail not ingested — run: python scripts/ingest_holy_grail.py <path>",
                 }
 
-        if analysis_mode == "prompt":
-            analysis = run_prompt_analysis(
-                mode=mode,
-                title=title,
-                pool=pool,
-                hg_block=hg_block,
-            )
-        elif analysis_mode == "rag":
-            analysis = run_rag_analysis(
-                mode=mode,
-                title=title,
-                pool=pool,
-                hg_block=hg_block,
-            )
-        else:
-            return {
-                "ok": False,
-                "mode": mode,
-                "error": f"unknown analysis_mode: {analysis_mode!r}",
-            }
+        analysis = run_analysis(
+            mode=mode,
+            title=title,
+            pool=pool,
+            hg_block=hg_block,
+        )
 
         return {
             "ok": True,
@@ -114,9 +98,8 @@ def run(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Live LLM analysis diagnostic")
     parser.add_argument("--mode", choices=["texture", "bucket"], default="texture")
-    parser.add_argument("--analysis-mode", choices=["prompt", "rag"], default="prompt")
     args = parser.parse_args()
 
-    result = run(_CLI_CANNED_POST, args.mode, analysis_mode=args.analysis_mode)
+    result = run(_CLI_CANNED_POST, args.mode)
     print(json.dumps(result, indent=2))
     sys.exit(0 if result["ok"] else 1)

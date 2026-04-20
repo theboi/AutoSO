@@ -1,13 +1,10 @@
-from unittest.mock import MagicMock, patch
-
-from autoso.pipeline.analysis import AnalysisResult, CitationRecord
+from autoso.pipeline.analysis import CitationRecord
 from autoso.pipeline.flatten import FlatComment
 from autoso.pipeline.pool import Pool, PoolItem
 from autoso.pipeline.prompt_analysis import (
     extract_citations_from_output,
     render_flat_comment,
     render_user_message,
-    run_prompt_analysis,
 )
 from autoso.scraping.models import Post
 
@@ -104,7 +101,7 @@ def test_render_user_message_includes_sources_and_comments():
     assert "[1] alpha" in msg
     assert "[2] bravo" in msg
     assert "Format TITLE" in msg
-    assert "After each bullet, append the citation markers" in msg
+    assert "After each bullet point or numbered item, append the citation markers" in msg
 
 
 def test_render_user_message_with_hg_block():
@@ -156,65 +153,3 @@ def test_extract_citations_empty_when_no_markers():
     output = "no markers here"
 
     assert extract_citations_from_output(output, pool) == []
-
-
-def test_run_prompt_analysis_returns_result():
-    pool = _texture_pool()
-
-    fake_response = MagicMock()
-    fake_response.content = [MagicMock(text="- 100% said alpha [1]")]
-
-    with patch("autoso.pipeline.prompt_analysis.anthropic.Anthropic") as MockClient, patch(
-        "autoso.pipeline.prompt_analysis.config"
-    ) as MockConfig:
-        MockConfig.ANTHROPIC_API_KEY = "sk-test"
-        MockConfig.CLAUDE_MODEL = "claude-sonnet-4-6"
-        MockConfig.USE_OLLAMA = False
-        MockClient.return_value.messages.create.return_value = fake_response
-
-        result = run_prompt_analysis(mode="texture", title="My Title", pool=pool, hg_block=None)
-
-    assert isinstance(result, AnalysisResult)
-    assert result.output_cited == "- 100% said alpha [1]"
-    assert result.output_clean == "- 100% said alpha"
-    assert [r.citation_number for r in result.citations] == [1]
-
-    call_kwargs = MockClient.return_value.messages.create.call_args.kwargs
-    assert call_kwargs["model"] == "claude-sonnet-4-6"
-    assert call_kwargs["system"].startswith("This GPT's role")
-    assert call_kwargs["messages"][0]["role"] == "user"
-    assert "My Title" in call_kwargs["messages"][0]["content"]
-    assert "[1] alpha" in call_kwargs["messages"][0]["content"]
-
-
-def test_run_prompt_analysis_bucket_mode_includes_hg_block():
-    pool = _texture_pool()
-
-    fake_response = MagicMock()
-    fake_response.content = [MagicMock(text="*Positive*\n1.  praised [1]")]
-
-    with patch("autoso.pipeline.prompt_analysis.anthropic.Anthropic") as MockClient, patch(
-        "autoso.pipeline.prompt_analysis.config"
-    ) as MockConfig:
-        MockConfig.ANTHROPIC_API_KEY = "sk-test"
-        MockConfig.CLAUDE_MODEL = "claude-sonnet-4-6"
-        MockConfig.USE_OLLAMA = False
-        MockClient.return_value.messages.create.return_value = fake_response
-
-        run_prompt_analysis(mode="bucket", title="T", pool=pool, hg_block="BUCKET_LABELS")
-
-    call_kwargs = MockClient.return_value.messages.create.call_args.kwargs
-    assert "BUCKET HOLY GRAIL REFERENCE:" in call_kwargs["messages"][0]["content"]
-    assert "BUCKET_LABELS" in call_kwargs["messages"][0]["content"]
-
-
-def test_run_prompt_analysis_raises_if_ollama_enabled():
-    pool = _texture_pool()
-    with patch("autoso.pipeline.prompt_analysis.config") as MockConfig:
-        MockConfig.USE_OLLAMA = True
-        try:
-            run_prompt_analysis(mode="texture", title="T", pool=pool, hg_block=None)
-        except RuntimeError as e:
-            assert "prompt mode" in str(e).lower()
-        else:
-            raise AssertionError("expected RuntimeError")

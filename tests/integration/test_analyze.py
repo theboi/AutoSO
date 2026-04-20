@@ -80,8 +80,8 @@ def test_bucket_analysis_returns_valid_format_or_skips_if_no_holy_grail():
 
 
 @pytest.mark.integration
-def test_texture_multi_url_prompt_mode():
-    """Integration-style regression: storage receives both URLs in prompt mode."""
+def test_texture_multi_url_citation_mode():
+    """Integration-style regression: storage receives both URLs in citation mode."""
     _require_anthropic()
 
     analysis = AnalysisResult(output_cited="- Point [1]", output_clean="- Point", citations=[])
@@ -92,17 +92,16 @@ def test_texture_multi_url_prompt_mode():
             side_effect=[("sid-1", CANNED_POST), ("sid-2", CANNED_POST)],
         ),
         patch("autoso.pipeline.pipeline.store_multi_result", return_value="run-xyz") as mock_store,
-        patch("autoso.pipeline.pipeline.run_prompt_analysis", return_value=analysis),
+        patch("autoso.pipeline.pipeline.run_analysis", return_value=analysis),
     ):
         result = run_pipeline(
             urls=["https://a.example/x", "https://b.example/y"],
             mode="texture",
-            analysis_mode="prompt",
             provided_title="Integration Multi URL",
         )
 
     assert result.run_id == "run-xyz"
     _, kwargs = mock_store.call_args
     assert kwargs["urls"] == ["https://a.example/x", "https://b.example/y"]
-    assert kwargs["analysis_mode"] == "prompt"
+    assert kwargs["analysis_mode"] == "citation"
     assert len(kwargs["scrape_ids"]) == 2

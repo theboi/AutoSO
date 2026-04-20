@@ -8,8 +8,7 @@ from autoso.pipeline.flatten import flatten_post_comments
 from autoso.pipeline.holy_grail import load_holy_grail
 from autoso.pipeline.llm import configure_llm
 from autoso.pipeline.pool import build_pool
-from autoso.pipeline.prompt_analysis import run_prompt_analysis
-from autoso.pipeline.rag_analysis import run_rag_analysis
+from autoso.pipeline.run_analysis import run_analysis
 from autoso.pipeline.scaling import comments_per_link
 from autoso.pipeline.title import infer_title
 from autoso.scraping import scrape
@@ -18,7 +17,6 @@ from autoso.storage.supabase import store_multi_result
 logger = logging.getLogger(__name__)
 
 Mode = Literal["texture", "bucket"]
-AnalysisMode = Literal["prompt", "rag"]
 
 
 @dataclass
@@ -41,7 +39,6 @@ def _run_holy_grail() -> str:
 def run_pipeline(
     urls: list[str],
     mode: Mode,
-    analysis_mode: AnalysisMode = "prompt",
     provided_title: Optional[str] = None,
 ) -> PipelineResult:
     if not urls:
@@ -66,28 +63,18 @@ def run_pipeline(
 
     hg_block = _run_holy_grail() if mode == "bucket" else None
 
-    if analysis_mode == "prompt":
-        analysis = run_prompt_analysis(
-            mode=mode,
-            title=title,
-            pool=pool,
-            hg_block=hg_block,
-        )
-    elif analysis_mode == "rag":
-        analysis = run_rag_analysis(
-            mode=mode,
-            title=title,
-            pool=pool,
-            hg_block=hg_block,
-        )
-    else:
-        raise ValueError(f"unknown analysis_mode: {analysis_mode!r}")
+    analysis = run_analysis(
+        mode=mode,
+        title=title,
+        pool=pool,
+        hg_block=hg_block,
+    )
 
     run_id = store_multi_result(
         urls=urls,
         scrape_ids=scrape_ids,
         mode=mode,
-        analysis_mode=analysis_mode,
+        analysis_mode="citation",
         title=title,
         analysis=analysis,
     )

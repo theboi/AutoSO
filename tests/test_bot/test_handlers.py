@@ -33,7 +33,6 @@ async def test_start_handler_replies():
     text = update.message.reply_text.call_args.args[0]
     assert "/texture" in text
     assert "/bucket" in text
-    assert "-m prompt|rag" in text
 
 
 async def test_texture_handler_no_args_sends_usage():
@@ -57,11 +56,10 @@ async def test_texture_handler_calls_pipeline_and_replies():
     mock_pipeline.assert_called_once_with(
         urls=["https://reddit.com/r/sg/comments/abc"],
         mode="texture",
-        analysis_mode="prompt",
         provided_title=None,
     )
     calls = [str(c) for c in update.message.reply_text.call_args_list]
-    assert any("Processing 1 link(s) with prompt mode" in c for c in calls)
+    assert any("Processing 1 link(s)" in c for c in calls)
     assert any("praised SAF" in c for c in calls)
 
 
@@ -80,7 +78,6 @@ async def test_handler_notifies_user_when_output_too_long():
     mock_pipeline.assert_called_once_with(
         urls=["https://reddit.com/r/sg/comments/abc"],
         mode="texture",
-        analysis_mode="prompt",
         provided_title=None,
     )
     calls = [str(c) for c in update.message.reply_text.call_args_list]
@@ -102,19 +99,19 @@ async def test_handler_replies_on_pipeline_exception():
     [
         (
             ["https://a.com"],
-            (["https://a.com"], "prompt", None),
+            (["https://a.com"], None),
         ),
         (
-            ["https://a.com", "https://b.com", "-m", "rag"],
-            (["https://a.com", "https://b.com"], "rag", None),
+            ["https://a.com", "https://b.com"],
+            (["https://a.com", "https://b.com"], None),
         ),
         (
             ["https://a.com", '"My', "Quoted", 'Title"'],
-            (["https://a.com"], "prompt", "My Quoted Title"),
+            (["https://a.com"], "My Quoted Title"),
         ),
         (
-            ["https://a.com", "-m", "prompt", "'Single token title'"],
-            (["https://a.com"], "prompt", "Single token title"),
+            ["https://a.com", "'Single token title'"],
+            (["https://a.com"], "Single token title"),
         ),
     ],
 )
@@ -126,8 +123,6 @@ def test_parse_analysis_args_valid(args, expected):
     "args",
     [
         [],
-        ["-m"],
-        ["-m", "bad"],
         ["title-only"],
         ["https://a.com", "--unknown"],
         ["https://a.com", '"unterminated', "title"],
@@ -141,14 +136,12 @@ def test_parse_analysis_args_invalid(args):
         _parse_analysis_args(args)
 
 
-async def test_bucket_handler_multi_url_rag_and_quoted_title():
+async def test_bucket_handler_multi_url_with_quoted_title():
     update, context = _make_update(
         99,
         [
             "https://a.com/post",
             "https://b.com/post",
-            "-m",
-            "rag",
             '"My',
             "Custom",
             'Title"',
@@ -158,7 +151,7 @@ async def test_bucket_handler_multi_url_rag_and_quoted_title():
         title="My Custom Title",
         output="Result body",
         output_cited="Result body [1]",
-        run_id="run-rag",
+        run_id="run-bucket",
     )
     with patch("autoso.bot.handlers.run_pipeline", return_value=mock_result) as mock_pipeline:
         await bucket_handler(update, context)
@@ -166,9 +159,8 @@ async def test_bucket_handler_multi_url_rag_and_quoted_title():
     mock_pipeline.assert_called_once_with(
         urls=["https://a.com/post", "https://b.com/post"],
         mode="bucket",
-        analysis_mode="rag",
         provided_title="My Custom Title",
     )
     calls = [str(c) for c in update.message.reply_text.call_args_list]
-    assert any("Processing 2 link(s) with rag mode" in c for c in calls)
+    assert any("Processing 2 link(s)" in c for c in calls)
     assert any("Result body" in c for c in calls)

@@ -1,22 +1,12 @@
-"""Prompt-mode analysis: direct Anthropic SDK with all comments inline."""
+"""Rendering helpers for the analysis pipeline."""
 
 from __future__ import annotations
 
 import re
 from typing import Optional
 
-import anthropic
-
-import autoso.config as config
-from autoso.pipeline.analysis import AnalysisResult, CitationRecord
-from autoso.pipeline.citation import strip_citation_markers
+from autoso.pipeline.analysis import CitationRecord
 from autoso.pipeline.pool import Pool, PoolItem
-from autoso.pipeline.prompts import (
-    BUCKET_FORMAT_INSTRUCTION,
-    BUCKET_SYSTEM_PROMPT,
-    TEXTURE_FORMAT_INSTRUCTION,
-    TEXTURE_SYSTEM_PROMPT,
-)
 
 _APPEND_INSTRUCTION = (
     "After each bullet point or numbered item, append the citation markers [N] for the "
@@ -94,46 +84,3 @@ def extract_citations_from_output(output_text: str, pool: Pool) -> list[Citation
 
     return records
 
-
-def run_prompt_analysis(
-    mode: str,
-    title: str,
-    pool: Pool,
-    hg_block: Optional[str],
-) -> AnalysisResult:
-    if getattr(config, "USE_OLLAMA", False):
-        raise RuntimeError(
-            "prompt mode requires Anthropic API; set USE_OLLAMA=false or use -m rag"
-        )
-
-    if mode == "texture":
-        system = TEXTURE_SYSTEM_PROMPT
-        format_instruction = TEXTURE_FORMAT_INSTRUCTION.format(title=title)
-    elif mode == "bucket":
-        system = BUCKET_SYSTEM_PROMPT
-        format_instruction = BUCKET_FORMAT_INSTRUCTION.format(title=title)
-    else:
-        raise ValueError(f"unknown mode: {mode!r}")
-
-    user_message = render_user_message(
-        pool=pool,
-        format_instruction=format_instruction,
-        hg_block=hg_block,
-    )
-
-    client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
-    response = client.messages.create(
-        model=config.CLAUDE_MODEL,
-        max_tokens=4096,
-        system=system,
-        messages=[{"role": "user", "content": user_message}],
-    )
-
-    output_cited = "".join(getattr(block, "text", "") for block in response.content)
-    output_clean = strip_citation_markers(output_cited)
-    citations = extract_citations_from_output(output_cited, pool)
-    return AnalysisResult(
-        output_cited=output_cited,
-        output_clean=output_clean,
-        citations=citations,
-    )

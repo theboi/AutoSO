@@ -53,27 +53,16 @@ def _is_valid_url(text: str) -> bool:
         return False
 
 
-def _parse_analysis_args(args: list[str]) -> tuple[list[str], str, str | None]:
+def _parse_analysis_args(args: list[str]) -> tuple[list[str], str | None]:
     if not args:
         raise ArgParseError("No arguments provided.")
 
     urls: list[str] = []
-    analysis_mode = "prompt"
     title: str | None = None
 
     i = 0
     while i < len(args):
         token = args[i]
-
-        if token in ("-m", "--mode"):
-            if i + 1 >= len(args):
-                raise ArgParseError("Missing value for -m/--mode.")
-            mode_value = args[i + 1].strip().lower()
-            if mode_value not in ("prompt", "rag"):
-                raise ArgParseError(f"Invalid mode: {mode_value!r}. Use prompt or rag.")
-            analysis_mode = mode_value
-            i += 2
-            continue
 
         if token.startswith('"') or token.startswith("'"):
             if title is not None:
@@ -113,15 +102,15 @@ def _parse_analysis_args(args: list[str]) -> tuple[list[str], str, str | None]:
     if not urls:
         raise ArgParseError("At least one valid URL is required.")
 
-    return urls, analysis_mode, title
+    return urls, title
 
 
 @require_auth
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "AutoSO ready.\n\n"
-        '/texture <url> [url ...] [-m prompt|rag] ["Title"] — Texture analysis\n'
-        '/bucket <url> [url ...] [-m prompt|rag] ["Title"] — Bucket analysis\n'
+        '/texture <url> [url ...] ["Title"] — Texture analysis\n'
+        '/bucket <url> [url ...] ["Title"] — Bucket analysis\n'
         "/transcribe <url> [title] — Transcribe audio/video"
     )
 
@@ -139,15 +128,15 @@ async def bucket_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def _handle_analysis(
     update: Update, context: ContextTypes.DEFAULT_TYPE, mode: str
 ):
-    usage = f'/{mode} <url> [url ...] [-m prompt|rag] ["Title"]'
+    usage = f'/{mode} <url> [url ...] ["Title"]'
     try:
-        urls, analysis_mode, provided_title = _parse_analysis_args(context.args or [])
+        urls, provided_title = _parse_analysis_args(context.args or [])
     except ArgParseError as e:
         await update.message.reply_text(f"{e}\nUsage: {usage}")
         return
 
     await update.message.reply_text(
-        f"Queued {len(urls)} link(s) with {analysis_mode} mode. Processing now — this may take a minute."
+        f"Processing {len(urls)} link(s). This may take a minute."
     )
 
     try:
@@ -158,7 +147,6 @@ async def _handle_analysis(
                 run_pipeline,
                 urls=urls,
                 mode=mode,
-                analysis_mode=analysis_mode,
                 provided_title=provided_title,
             ),
         )
@@ -180,12 +168,7 @@ async def _handle_analysis(
                 await update.message.reply_text(chunk)
 
     except Exception:
-        logger.exception(
-            "Pipeline error for urls=%s mode=%s analysis_mode=%s",
-            urls,
-            mode,
-            analysis_mode,
-        )
+        logger.exception("Pipeline error for urls=%s mode=%s", urls, mode)
         await update.message.reply_text(
             "An error occurred while processing your request. Check logs for details."
         )

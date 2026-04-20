@@ -1,11 +1,11 @@
 import re
 
-from llama_index.core import VectorStoreIndex
+from llama_index.core.indices.base import BaseIndex
 from llama_index.core.query_engine import CitationQueryEngine
 
 
 def build_citation_engine(
-    index: VectorStoreIndex,
+    index: BaseIndex,
     similarity_top_k: int = 10,
     system_prompt: str | None = None,
     citation_chunk_size: int = 512,

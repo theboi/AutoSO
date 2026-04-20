@@ -59,12 +59,7 @@ def _default_patches(post: Post, analysis: AnalysisResult):
             "autoso.pipeline.pipeline.flatten_post_comments", return_value=[]
         ),
         "build_pool": patch("autoso.pipeline.pipeline.build_pool", return_value=pool),
-        "run_prompt_analysis": patch(
-            "autoso.pipeline.pipeline.run_prompt_analysis", return_value=analysis
-        ),
-        "run_rag_analysis": patch(
-            "autoso.pipeline.pipeline.run_rag_analysis", return_value=analysis
-        ),
+        "run_analysis": patch("autoso.pipeline.pipeline.run_analysis", return_value=analysis),
         "store_multi_result": patch(
             "autoso.pipeline.pipeline.store_multi_result", return_value="run-123"
         ),
@@ -81,8 +76,7 @@ def test_texture_single_url_returns_result(post, analysis_result):
         p["comments_per_link"],
         p["flatten_post_comments"],
         p["build_pool"],
-        p["run_prompt_analysis"] as run_prompt,
-        p["run_rag_analysis"],
+        p["run_analysis"] as run_analysis,
         p["store_multi_result"],
         p["scrape"],
         p["infer_title"],
@@ -91,7 +85,6 @@ def test_texture_single_url_returns_result(post, analysis_result):
         result = run_pipeline(
             urls=["https://reddit.com/r/test/comments/abc"],
             mode="texture",
-            analysis_mode="prompt",
             provided_title="Custom",
         )
 
@@ -99,7 +92,7 @@ def test_texture_single_url_returns_result(post, analysis_result):
     assert result.title == "Custom"
     assert result.output == "- Point"
     assert result.citations == analysis_result.citations
-    run_prompt.assert_called_once()
+    run_analysis.assert_called_once()
 
 
 def test_multi_url_passes_urls_scrape_ids_and_analysis_mode_to_storage(post, analysis_result):
@@ -109,8 +102,7 @@ def test_multi_url_passes_urls_scrape_ids_and_analysis_mode_to_storage(post, ana
         p["comments_per_link"],
         p["flatten_post_comments"],
         p["build_pool"],
-        p["run_prompt_analysis"],
-        p["run_rag_analysis"],
+        p["run_analysis"],
         p["store_multi_result"] as store,
         patch(
             "autoso.pipeline.pipeline.scrape",
@@ -122,34 +114,13 @@ def test_multi_url_passes_urls_scrape_ids_and_analysis_mode_to_storage(post, ana
         run_pipeline(
             urls=["https://a.com/post", "https://b.com/post"],
             mode="texture",
-            analysis_mode="prompt",
             provided_title="T",
         )
 
     _, kwargs = store.call_args
     assert kwargs["urls"] == ["https://a.com/post", "https://b.com/post"]
     assert kwargs["scrape_ids"] == ["sid-1", "sid-2"]
-    assert kwargs["analysis_mode"] == "prompt"
-
-
-def test_rag_mode_dispatches_to_run_rag_analysis(post, analysis_result):
-    p = _default_patches(post, analysis_result)
-    with (
-        p["configure_llm"],
-        p["comments_per_link"],
-        p["flatten_post_comments"],
-        p["build_pool"],
-        p["run_prompt_analysis"] as run_prompt,
-        p["run_rag_analysis"] as run_rag,
-        p["store_multi_result"],
-        p["scrape"],
-        p["infer_title"],
-        p["holy_grail"],
-    ):
-        run_pipeline(urls=["https://a.com/post"], mode="texture", analysis_mode="rag")
-
-    run_rag.assert_called_once()
-    run_prompt.assert_not_called()
+    assert kwargs["analysis_mode"] == "citation"
 
 
 def test_bucket_uses_holy_grail_and_passes_hg_block(post, analysis_result):
@@ -159,17 +130,16 @@ def test_bucket_uses_holy_grail_and_passes_hg_block(post, analysis_result):
         p["comments_per_link"],
         p["flatten_post_comments"],
         p["build_pool"],
-        p["run_prompt_analysis"] as run_prompt,
-        p["run_rag_analysis"],
+        p["run_analysis"] as run_analysis,
         p["store_multi_result"],
         p["scrape"],
         p["infer_title"],
         p["holy_grail"] as holy,
     ):
-        run_pipeline(urls=["https://a.com/post"], mode="bucket", analysis_mode="prompt")
+        run_pipeline(urls=["https://a.com/post"], mode="bucket")
 
     holy.assert_called_once()
-    assert run_prompt.call_args.kwargs["hg_block"] == "HG"
+    assert run_analysis.call_args.kwargs["hg_block"] == "HG"
 
 
 def test_texture_skips_holy_grail(post, analysis_result):
@@ -179,17 +149,16 @@ def test_texture_skips_holy_grail(post, analysis_result):
         p["comments_per_link"],
         p["flatten_post_comments"],
         p["build_pool"],
-        p["run_prompt_analysis"] as run_prompt,
-        p["run_rag_analysis"],
+        p["run_analysis"] as run_analysis,
         p["store_multi_result"],
         p["scrape"],
         p["infer_title"],
         p["holy_grail"] as holy,
     ):
-        run_pipeline(urls=["https://a.com/post"], mode="texture", analysis_mode="prompt")
+        run_pipeline(urls=["https://a.com/post"], mode="texture")
 
     holy.assert_not_called()
-    assert run_prompt.call_args.kwargs["hg_block"] is None
+    assert run_analysis.call_args.kwargs["hg_block"] is None
 
 
 def test_empty_urls_raises_value_error():
@@ -204,8 +173,7 @@ def test_infer_title_used_when_no_title(post, analysis_result):
         p["comments_per_link"],
         p["flatten_post_comments"],
         p["build_pool"],
-        p["run_prompt_analysis"],
-        p["run_rag_analysis"],
+        p["run_analysis"],
         p["store_multi_result"],
         p["scrape"],
         p["infer_title"] as infer,
@@ -214,7 +182,6 @@ def test_infer_title_used_when_no_title(post, analysis_result):
         result = run_pipeline(
             urls=["https://a.com/post"],
             mode="texture",
-            analysis_mode="prompt",
             provided_title=None,
         )
 
